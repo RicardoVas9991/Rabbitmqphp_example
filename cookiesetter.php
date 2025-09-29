@@ -11,7 +11,9 @@ $response = "unsupported request type, politely";
 
 if (!isset($my_request["type"]))
 {
-    $response = "NO POST MESSAGE SET, POLITELY";
+	$response = "NO POST MESSAGE SET, POLITELY";
+	echo json_encode(array("status" => "error", "message" => $response));
+    exit(0);
 }
 
 switch ($my_request["type"])
@@ -46,6 +48,9 @@ switch ($my_request["type"])
         $response = array("status" => "success", "redirect" => "loggedin.html");
         echo json_encode($response);
         exit(0);
-    break;
+	break; 
+	default:
+        echo json_encode(array("status" => "error", "message" => "unsupported request type, politely"));
+        exit(0);
 }
 ?>
