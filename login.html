@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <title>IT490 Test Login Page</title>
+    </head>
+<script>
+    // Add your JavaScript code here
+    function HandleLoginResponse(response)
+    {
+        console.log("Raw response:", response);
+        console.log("Response length:", response.length);
+        console.log("First few chars:", response.substring(0, 10));
+        
+        try {
+            var jsonResponse = JSON.parse(response);
+            if (jsonResponse.status === "success") {
+                window.location.href = jsonResponse.redirect;
+            } else {
+                document.getElementById("textResponse").innerHTML = "Error: " + (jsonResponse.message || jsonResponse);
+            }
+        } catch (e) {
+            console.error("JSON parse error:", e);
+            document.getElementById("textResponse").innerHTML = "Error: Invalid response format. Check console for details.";
+        }
+    }
+
+    function SendLoginRequest(username,password)
+    {
+        var request = new XMLHttpRequest();
+        request.open("POST","login.php",true);
+        request.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+        request.onreadystatechange= function ()
+        {
+            
+            if ((this.readyState == 4)&&(this.status == 200))
+            {
+                HandleLoginResponse(this.responseText);
+            }		
+        }
+        request.send("type=login&uname="+username+"&pword="+password);
+    }
+</script>
+
+<body>
+    <section class="MainHeaderContainer">
+        <header class="MainHeader">
+            <h1>Login Below!</h1>
+        </header>
+        <div id="textResponse">
+            awaiting response
+            <form id="loginForm" action="login.php" method="POST">
+                <label for="username">Enter username:</label><br>
+                <input type="text" name="uname" required>
+                <br>
+                
+                <label for="password">Enter Password:</label><br>
+                <input type="password" name="pword" required>
+                <br>
+                
+                <input type="submit" value="Login"> 
+            </form>
+        </div>
+    </section>
+    <script>
+        const formInfo = document.getElementById("loginForm");
+
+        formInfo.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+
+            const loginUsername = formData.get("uname");
+            const loginPassword = formData.get("pword");
+            SendLoginRequest(loginUsername, loginPassword);
+        });
+    </script>
+</body>
+</html>
