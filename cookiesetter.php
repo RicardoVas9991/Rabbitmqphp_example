@@ -7,11 +7,11 @@ if ($mydb->errno != 0)
     exit(0);
 }
 $my_request = $_POST;   
-$response = "unsupported request type, politely";
+$response = "GO AWAY PLEASE!";
 
 if (!isset($my_request["type"]))
 {
-	$response = "NO POST MESSAGE SET, POLITELY";
+	$response = "GO AWAY PLEASE!";
 	echo json_encode(array("status" => "error", "message" => $response));
     exit(0);
 }
@@ -48,9 +48,10 @@ switch ($my_request["type"])
         $response = array("status" => "success", "redirect" => "loggedin.html");
         echo json_encode($response);
         exit(0);
-	break; 
+	break;
 	default:
-        echo json_encode(array("status" => "error", "message" => "unsupported request type, politely"));
+        echo json_encode(array("status" => "error", "message" => "GO AWAY PLEASE!"));
         exit(0);
 }
 ?>
+
