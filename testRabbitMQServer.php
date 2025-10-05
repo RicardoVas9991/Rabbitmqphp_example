@@ -26,8 +26,8 @@ function createSession($username)
     $session_id = bin2hex(random_bytes(16));
     $auth_token = bin2hex(random_bytes(16));
     $expiration = date('Y-m-d H:i:s', time() + (86400 * 30)); // 30 days
-    $ip_address = '127.0.0.1'; 
-    $user_agent = 'RabbitMQClient/1.0'; 
+    $ip_address = '127.0.0.1';
+    $user_agent = 'RabbitMQClient/1.0';
 
     $stmt = $db->prepare("INSERT INTO user_cookies (session_id, username, auth_token, expiration_time, ip_address, user_agent)
                           VALUES (?, ?, ?, ?, ?, ?)");
@@ -38,6 +38,45 @@ function createSession($username)
         'session_id' => $session_id,
         'auth_token' => $auth_token,
         'expiration_time' => $expiration
+    );
+}
+
+function doRegister($username, $password, $email)
+{
+    $db = getDBConnection();
+
+    // Check if username already exists
+    $stmt = $db->prepare("SELECT userId FROM users WHERE username = ?");
+    $stmt->bind_param("s", $username);
+    $stmt->execute();
+    $stmt->store_result();
+
+    if ($stmt->num_rows > 0) {
+        return array("returnCode" => 1, "message" => "Username already exists");
+    }
+    $stmt->close();
+
+    // Hash password securely
+    $hash = password_hash($password, PASSWORD_BCRYPT, ["cost" => 12]);
+
+    // Insert new user
+    $insertStmt = $db->prepare("INSERT INTO users (username, password, email) VALUES (?, ?, ?)");
+    $insertStmt->bind_param("sss", $username, $hash, $email);
+    $success = $insertStmt->execute();
+
+    if (!$success) {
+        return array("returnCode" => 2, "message" => "Database insert failed: " . $db->error);
+    }
+
+    $insertStmt->close();
+
+    // Optionally, create a session right after registration
+    $session = createSession($username);
+
+    return array(
+        "returnCode" => 0,
+        "message" => "Registration successful",
+        "session" => $session
     );
 }
 
@@ -58,9 +97,7 @@ function doLogin($username, $password)
     $stmt->fetch();
 
     if (password_verify($password, $dbPassword)) {
-        // Successful login → create session
         $session = createSession($username);
-
         return array(
             "returnCode" => 0,
             "message" => "Login successful",
@@ -102,7 +139,9 @@ function requestProcessor($request)
         return array("returnCode" => 99, "message" => "Unsupported request type");
     }
 
-    switch ($request['type']) {
+    switch (strtolower($request['type'])) {
+        case "register":
+            return doRegister($request['username'], $request['password'], $request['email']);
         case "login":
             return doLogin($request['username'], $request['password']);
         case "validate_session":
