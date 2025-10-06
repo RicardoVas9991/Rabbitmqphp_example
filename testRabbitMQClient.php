@@ -6,43 +6,68 @@ require_once('rabbitMQLib.inc');
 
 $client = new rabbitMQClient("testRabbitMQ.ini", "testServer");
 
+// Default type is "register"
+$type = "register";
 if (isset($argv[1])) {
-    $msg = $argv[1];
-} else {
-    $msg = "test message";
+    $type = strtolower($argv[1]);
 }
 
-$request = [
-    'type' => 'register',
-    'username' => 'steve',
-    'password' => '$2y$12$Qe5INaDqD3nPy5hzp3OjFeJMSscq0TwxLhj5X6YhNnPEO4fAe0r8i',
-    'email' => 'steve@example.com'
-];
+// Choose the message type dynamically
+switch ($type) {
+    case "register":
+        $request = [
+            'type' => 'register',
+            'username' => 'steve',
+            'password' => '$2y$12$Qe5INaDqD3nPy5hzp3OjFeJMSscq0TwxLhj5X6YhNnPEO4fAe0r8i',
+            'email' => 'steve@example.com'
+        ];
+        break;
 
+    case "update":
+        $request = [
+            'type' => 'update_user',
+            'username' => 'steve',
+            'email' => 'steve_updated@example.com',
+            'password' => 'NewStrongPassword123!'
+        ];
+        break;
 
-$request['message'] = $msg;
+    case "login":
+        $request = [
+            'type' => 'login',
+            'username' => 'steve',
+            'password' => 'NewStrongPassword123!'
+        ];
+        break;
+
+    default:
+        echo "Unknown type. Use one of: register, update, login" . PHP_EOL;
+        exit(1);
+}
+
 $response = $client->send_request($request);
 
-echo "Client received response: " . PHP_EOL;
+echo "Client received response:" . PHP_EOL;
 print_r($response);
-echo "\n\n";
+echo PHP_EOL;
 
+// Handle successful session creation
 if (isset($response['returnCode']) && $response['returnCode'] === 0 && isset($response['session']['auth_token'])) {
     $auth_token = $response['session']['auth_token'];
 
-    // Set cookie for web environment
+    // Simulate web cookie (only applies if running via web)
     setcookie('auth_token', $auth_token, [
-        'expires' => time() + (86400 * 30), // 30 days
+        'expires' => time() + (86400 * 30),
         'path' => '/',
-        'domain' => 'localhost',            // adjust as needed
-        'secure' => true,                   // only HTTPS
-        'httponly' => true,                 // inaccessible to JS
+        'domain' => 'localhost',
+        'secure' => true,
+        'httponly' => true,
         'samesite' => 'Strict'
     ]);
 
     echo "Auth token cookie set successfully!" . PHP_EOL;
 } else {
-    echo "Registration failed or no session returned." . PHP_EOL;
+    echo "Operation failed or no session returned." . PHP_EOL;
 }
 
 echo $argv[0] . " END" . PHP_EOL;
