@@ -37,7 +37,7 @@ function doRegister($username, $password)
         return ["returnCode" => 1, "message" => "Username already exists"];
     }
 
-    $stmt = $mydb->prepare("INSERT INTO users(username, password) VALUES(?, ?)");
+    $stmt = $mydb->prepare("INSERT INTO users(username, password, email) VALUES(?, ?, ?)");
     $stmt->bind_param("ss", $username, $password);
     if ($stmt->execute()) {
         return ["returnCode" => 0, "message" => "Registration successful"];
@@ -125,7 +125,7 @@ function requestProcessor($request)
 // -----------------------------
 // RabbitMQ Server Setup
 // -----------------------------
-$server = new rabbitMQServer("testRabbitMQ.ini", "dbServer");
+$server = new rabbitMQServer("testRabbitMQ.ini", "sharedServer");
 echo "Database server active, waiting for requests..." . PHP_EOL;
 $server->process_requests('requestProcessor');
 
