@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html>
     <head>
     <meta charset="UTF-8">
@@ -7,44 +6,6 @@
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <title>IT490 Test Login Page</title>
     </head>
-<script>
-    // Add your JavaScript code here
-    function HandleLoginResponse(response)
-    {
-        console.log("Raw response:", response);
-        console.log("Response length:", response.length);
-        console.log("First few chars:", response.substring(0, 10));
-        
-        try {
-            var jsonResponse = JSON.parse(response);
-            if (jsonResponse.status === "success") {
-                window.location.href = jsonResponse.redirect;
-            } else {
-                document.getElementById("textResponse").innerHTML = "Error: " + (jsonResponse.message || jsonResponse);
-            }
-        } catch (e) {
-            console.error("JSON parse error:", e);
-            document.getElementById("textResponse").innerHTML = "Error: Invalid response format. Check console for details.";
-        }
-    }
-
-    function SendLoginRequest(username,password)
-    {
-        var request = new XMLHttpRequest();
-        request.open("POST","login.php",true);
-        request.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
-        request.onreadystatechange= function ()
-        {
-            
-            if ((this.readyState == 4)&&(this.status == 200))
-            {
-                HandleLoginResponse(this.responseText);
-            }		
-        }
-        request.send("type=login&uname="+username+"&pword="+password);
-    }
-</script>
-
 <body>
     <section class="MainHeaderContainer">
         <header class="MainHeader">
@@ -52,30 +13,73 @@
         </header>
         <div id="textResponse">
             awaiting response
-            <form id="loginForm" action="login.php" method="POST">
+            <form id="loginForm">
                 <label for="username">Enter username:</label><br>
-                <input type="text" name="uname" required>
+                <input type="text" for="username" name="username" id="username" placeholder="username" required>
                 <br>
                 
                 <label for="password">Enter Password:</label><br>
-                <input type="password" name="pword" required>
+                <input type="password" for="password" name="password" id="password" required>
                 <br>
-                
-                <input type="submit" value="Login"> 
+                <input type="hidden" name="type" value="login">
+                <input type="submit" value="login"> 
             </form>
+
+            <p id="textResponse"> Waiting for response</p>
         </div>
     </section>
     <script>
-        const formInfo = document.getElementById("loginForm");
+        
+    // Add your JavaScript code here
+    document.addEventListener("DOMContentLoaded", function() {
+        function HandleLoginResponse(response)
+        {
+            console.log("Raw response:", response);
+            const out = document.getElementById("textResponse");
 
-        formInfo.addEventListener("submit", (event) => {
-            event.preventDefault();
-            const formData = new FormData(event.target);
+            try {
+                const myJsonResponse = JSON.parse(response || "{}");
 
-            const loginUsername = formData.get("uname");
-            const loginPassword = formData.get("pword");
-            SendLoginRequest(loginUsername, loginPassword);
+                if (myJsonResponse.status === "success") {
+                    out.textContent = "Login successful! Redirecting...<p>";
+                    window.location.href = "loggedin.html";
+                } else {
+                    out.textContent = "Login failed: " + (myJsonResponse.message || "Unknown error") + "<p>";
+                }
+            } catch (e) {
+                console.error("JSON parse error:", e);
+                out.textContent = "Error processing response.";
+            }
+        }
+    
+
+        function SendLoginRequestJSON(loginData)
+        {
+            var request = new XMLHttpRequest();
+            request.open("POST","testRabbitMQClient.php",true);
+            request.setRequestHeader("Content-Type","application/json");
+            request.onreadystatechange = function () {
+                if (this.readyState == 4) {
+                    console.log("Server Response:", this.responseText);
+                    HandleLoginResponse(this.responseText);
+                }		
+            };
+            request.onerror = function() {
+                console.error("Request error");
+                document.getElementById("textResponse").innerHTML = "A network error has occurred.";
+            };
+            request.withCredentials = true; // Include cookies
+            request.send(JSON.stringify( loginData) );
+        }
+        
+        document.getElementById("loginForm").addEventListener("submit", function(event) {
+            event.preventDefault(); // Prevent the default form submission
+            const loginUsername = document.getElementById("username").value.trim();
+            const loginPassword = document.getElementById("password").value;
+            SendLoginRequestJSON({ type: "login", username: loginUsername, password: loginPassword }); 
         });
-    </script>
+    });  
+</script>
 </body>
 </html>
+

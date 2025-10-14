@@ -4,35 +4,41 @@ require_once('path.inc');
 require_once('get_host_info.inc');
 require_once('rabbitMQLib.inc');
 
+// Function that routes database-related requests to the dbServer
+function forwardToDB($request)
+{
+    $dbClient = new rabbitMQClient("testRabbitMQ.ini", "sharedServer");
+    return $dbClient->send_request($request);
+}
+
+// Main processor
 function requestProcessor($request)
 {
     echo "Broker received request:" . PHP_EOL;
     var_dump($request);
 
     if (!isset($request['type'])) {
-        return ["returnCode" => 99, "message" => "Invalid request: Missing type"];
+        return ["returnCode" => 1, "message" => "No request type provided"];
     }
 
-    // Forward all database-related operations to the DB server
     switch (strtolower($request['type'])) {
-        case "register":
         case "login":
-        case "validate_session":
-        case "update_user":
-            // Forward to the database server queue
-            $dbClient = new rabbitMQClient("testRabbitMQ.ini", "dbServer");
-            $response = $dbClient->send_request($request);
-            return $response;
+        case "register":
+	case "validate_session":
+	
+            // Forward these directly to dbServer
+            return forwardToDB($request);
 
         default:
             return ["returnCode" => 98, "message" => "Unknown request type"];
     }
 }
 
-$server = new rabbitMQServer("testRabbitMQ.ini", "brokerServer");
+// Start the broker server
+//$server = new rabbitMQServer("testRabbitMQ.ini", "brokerServer");
+//echo "Broker server active and waiting for requests..." . PHP_EOL;
+//$server->process_requests('requestProcessor');
 
-echo "Broker Server listening..." . PHP_EOL;
-$server->process_requests('requestProcessor');
-echo "Broker Server shutting down..." . PHP_EOL;
+//echo "Broker server shutting down." . PHP_EOL;
 ?>
 

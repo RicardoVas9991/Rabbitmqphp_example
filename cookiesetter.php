@@ -1,57 +1,44 @@
 <?php
-$mydb = new mysqli('127.0.0.1','testuser','rv9991$#','testdb');
 
-if ($mydb->errno != 0)
-{
-    echo "failed to connect to database: ". $mydb->error . PHP_EOL;
-    exit(0);
+function my_cookie_params(): array {
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+    $host = preg_replace('/:\d+$/', '', $host);
+    $proto = strtolower($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ($_SERVER['REQUEST_SCHEME'] ?? (isset($_SERVER['HTTPS']) ? 'HTTPS' : 'http')));
+    $is_https = $proto === 'https';
+
+    $my_params = [
+        'path' => '/',
+        'secure' => $is_https,
+        'httponly' => true,
+        'samesite' => 'Lax'
+    ];
+
+    if ($host && !filter_var($host, FILTER_VALIDATE_IP) && $host !== 'localhost') {
+        $my_params['domain'] = $host;
+    }
+    return $my_params;
 }
-$my_request = $_POST;   
-$response = "GO AWAY PLEASE!";
+function create_my_session_cookie(array $my_session): void{
+    $expires = strtotime($my_session['expires'] ?? '+1 hour');
+    $cookieParams = my_cookie_params();
+    $cookieParams['expires'] = $expires;
 
-if (!isset($my_request["type"]))
-{
-	$response = "GO AWAY PLEASE!";
-	echo json_encode(array("status" => "error", "message" => $response));
-    exit(0);
+    if (!empty($my_session['session_id'])) {
+        setcookie('session_id', $my_session['session_id'], $cookieParams);
+    }   
+
+    if(!empty($my_session['auth_token'])) {
+        setcookie('auth_token', $my_session['auth_token'], $cookieParams);
+    }
 }
 
-switch ($my_request["type"])
-{
-    case "login":
-        $username = $_POST["uname"];
-        $authorization_token = bin2hex(random_bytes(32));
+function erase_my_session_cookies(): void {
+    $my_cookie_base = my_cookie_params();
 
-        setcookie('auth_token', $authorization_token, [
-            'expires' => time() + (86400 * 30),
-            'path' => '/',
-            'domain' => 'localhost',
-            'secure' => true,
-            'httponly' => true,
-            'samesite' => 'Strict'
-        ]);
+    $base['expires'] = time() - 3600;
 
-        $sql_cookie_access_var = $mydb->prepare("INSERT INTO 
-        user_cookies (
-            session_id, 
-            username, 
-            auth_token, 
-            expiration_time, 
-            ip_address, 
-            user_agent) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        ");
-        $session_id_val = bin2hex(random_bytes(32));
-
-        $sql_cookie_access_var->bind_param("ssssss", $session_id_val, $username, $authorization_token, date('Y-m-d H:i:s', time() + (86400 * 30)), $_SERVER['REMOTE_ADDR'], $_SERVER['HTTP_USER_AGENT']);
-        $sql_cookie_access_var->execute();
-        $response = array("status" => "success", "redirect" => "loggedin.html");
-        echo json_encode($response);
-        exit(0);
-	break;
-	default:
-        echo json_encode(array("status" => "error", "message" => "GO AWAY PLEASE!"));
-        exit(0);
+    foreach (['session_id', 'auth_token'] as $cookie_name) {
+        setcookie($cookie_name, '', $base);
+    }
 }
 ?>
-
