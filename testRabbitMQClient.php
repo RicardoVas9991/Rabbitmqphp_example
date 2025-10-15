@@ -1,149 +1,144 @@
 <?php
-declare(strict_types=1);
+declare(strict_types= 1);
 
-if (!ob_get_level()) ob_start();
-
-$is_cli = (PHP_SAPI === 'cli');
-$method = $is_cli ? 'CLI' : ($_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
-
-if (file_exists(__DIR__ . '/get_host_info.inc')){
-  ob_start();
-  require_once __DIR__ . '/get_host_info.inc';
-  ob_end_clean();
-}
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '*';
+header("Access-Control-Allow-Origin: $origin");
+header('Access-Control-Allow-Credentials: true');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+header('Vary: Origin');
 
 
-if (!$is_cli && !headers_sent()){
-  $origin = $_SERVER['HTTP_ORIGIN'] ?? '*';
-  header("Access-Control-Allow-Origin: $origin");
-  header('Access-Control-Allow-Credentials: true');
-  header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-  header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-  header('Vary: Origin');
-}
 
-if (!$is_cli && $method === 'OPTIONS') {
-    // Handle preflight request
-    http_response_code(204);
-    if (ob_get_level()) ob_end_flush();
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
     exit;
-}
-
-$raw_input = $is_cli ? ($argv[1] ?? '') : file_get_contents('php://input');
-$input = json_decode($raw_input ?: '{}', true);
-
-
-if (!$is_cli && $method !== 'POST') {
-  http_response_code(405);
-  header('Content-Type: application/json; charset=utf-8');
-  echo json_encode(['status' => 'error', 'message' => 'Invalid request method. Expect POST (got $method)']);
-  exit;
-}
-
-if(!is_array($input)){
-  http_response_code(400);
-  header('Content-Type: application/json; charset=utf-8');
-  echo json_encode(['status' => 'error', 'message' => 'Invalid JSON format.']);
-  exit;
-}
-
-$type = $input['type'] ?? '';
-
+} 
 
 require_once('path.inc');
 require_once('get_host_info.inc');
-require_once('rabbitMQLib.inc');
-require_once('cookiesetter.php');
+require_once('rabbitMQLib.inc');  
 
-function json_response($data, $code=200): void {
-  http_response_code($code);
-  echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-  exit;
+header('Content-Type: application/json; charset=utf-8');
+
+function json_response(array $data, int $code = 200): never {
+    http_response_code($code);
+    echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+function set_session_cookies(array $session_cookie): bool {
+    if (empty($session_cookie['session_id']) || empty($session_cookie['auth_token'])) return false;
+
+    $expiresAt = $session['expires_at'] ?? '';
+    $expTs = 0;
+
+    if (is_string($expiresAt) && $expiresAt !== '')  {
+        $ts = strtotime($expiresAt);
+        if ($ts !== false) $expTs = $ts;
+    }
+
+    $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== "off";
+
+    $opts = [
+        'expires'   => $expTs,
+        'path'      => '/',
+        'secure'    => $secure,
+        'httponly'  => true,
+        'samesite'  => 'Lax'
+    ];
+
+    $ok1 = @setcookie('session_id', (string)$session_cookie['session_id'], $opts);
+    $ok2 = @setcookie('auth_token', (string)$session_cookie['auth_token'], $opts);
+    return $ok1 && $ok2;
+}
+
+function clear_session_cookies(): void {
+    $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== "off";
+
+    $opts = [
+        'expires'    => time() - 3600,
+        'path'       => '/',
+        'secure'     => $secure,
+        'httponly'   => true,
+        'samesite'   => 'Lax'
+    ];
+    @setcookie('session_id', '', $opts);
+    @setcookie('auth_token', '', $opts);
+}
+
+$raw = file_get_contents('php://input');
+$input = null;
+
+if(is_string($raw) && $raw !== '') {
+    $decoded = json_decode($raw, true);
+
+    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)){
+        $input = $decoded;
+    } 
 } 
 
-if (!$input) {
-    json_response(['status' => 'error', 'message' => 'Invalid request method.'], 405);
+if (!is_array($input)) {
+    json_response(['error' => 'Invalid JSON input'], 400);
 }
 
-if ($type === 'register'){
-  json_response(['status' => 'success', 'message' => 'Registration Successful']);
-} elseif ($type === 'login'){
-  json_response(['status' => 'success', 'message' => 'Login Successful']);
-} else{
-  json_response(['status' => 'error', 'message' => 'Unknown type.'], 400);
-}
-
-if (stripos($ct, needle: 'application/json') !== false && $raw !== '') {
-    $data = json_decode($raw, true);
-    if (!is_array($data)) {
-        json_response(['status' => 'error', 'message' => 'Invalid JSON format.'], 400);
-    }
-} else {
-    $data = $_POST;
-}
-
-$client = new rabbitMQClient("testRabbitMQ.ini","sharedServer");
-if (isset($argv[1]))
-{
-  $msg = $argv[1];
-}
-else
-{
-  $msg = "test message";
-}
-
-$type = strtolower($data['type'] ?? '');
-$username = $data['username'] ?? '';
-$password = $data['password'] ?? '';
-$email = $data['email'] ?? '';    
-$session_id_val = $data['sessioId'] ?? $data['sessionid'] ?? '';
-
+$type = strtolower((string)($input['type'] ?? ''));
 if (!in_array($type, ['login', 'register', 'validate_session'], true)) {
-    json_response(['status' => 'error', 'message' => 'Invalid action type.'], 400);
+    json_response(['error' => 'Unknown request type'], 400);
 }
+
+$username       = (string)($input['username'] ?? '');
+$password       = (string)($input['password'] ?? '');
+$email          = (string)($input['email'] ?? '');
+$session_id     = (string)($input['sessionId'] ?? $input['session_id'] ?? $input['sessionid'] ?? '');
 
 $request = [
-    'type' => $type,
-    'username' => $username,
-    'password' => $password,
-    'email' => $email,
-    'message' => $msg
+    'type'          => $type,
+    'username'      => $username,
+    'password'      => $password,
+    'email'         => $email,
+    'session_id'    => $session_id,
+    "message"       => "Greeting from RabbitMQClient.php",
 ];
 
-try{
-  $client = new rabbitMQClient("testRabbitMQ.ini","sharedServer");
+try {
+    $client = new rabbitMQClient("testRabbitMQ.ini","sharedServer");
+    $response = $client->send_request($request);
 
-  $rmq = $client->send_request($request);
+    if(!is_array($response)) {
+        $response = ['returnCode' => 99, 'message' => (string)$response];
+    }
 
-  if (is_array($rmq)) {
-    $rmq = ['returnCode' => 99, 'message' => (string) $rmq];
-  }
+    $ok = false;
+    if (isset($response['status']) && strtolower((string)$response['status']) === 'success') $ok = true;
+    if (isset($response['returnCode']) && (int)$response['returnCode'] === 0) $ok = true;
 
-  $ok = ($rmq['returnCode'] ?? 1) === 0;
+    $cookieSet = false;
 
-  if ($ok && isset($rmq['session']) && is_array($rmq['session'])) {
-      // Set session cookie
-      create_my_session_cookie($rmq['session']);
-  }
+    if ($ok && isset($response['session']) && is_array($response['session'])) {
+        $cookieSet = set_session_cookies($response['session']);
+    }
 
-  if ($type === 'validate_session' && !$ok) {
-    erase_my_session_cookies();
-  }
-  json_response([
-    'status' => $ok ? 'success' : 'error',
-    'message' => $rmq['message'] ?? null,
-    'data' => $rmq['data'] ?? $rmq,
-    'cookie_set' => $ok && isset($rmq['session']),
-    'session_valid' => $type === 'validate_session' ? $ok : null
-  ], $ok ? 200 : 400);
-} catch(Exception $e){
-  json_response(['status' => 'error', 'message' => 'Server error: '.$e->getMessage()], 500);  
+
+    if ($type === 'validate_session' && !$ok) {
+        clear_session_cookies();
+    }   
+
+    $result = [
+        'status'        => $ok ? 'success' : 'error',
+        'returnCode'    => (int)($response['returnCode'] ?? ($ok ? 0 : 1)),
+        'message'       => $response['message'] ?? '',,
+        'session'       => $response['session'] ?? null,
+        'cookieSet'     => $cookieSet,
+        'session_valid' => ($type === 'validate_session') ? $ok : null,
+    ];
+
+    json_response($result, 200);
+} catch (Throwable $e){
+    error_log('testRabbitMQClient.php exception: ' . $e->getMessage());
+    json_response([
+        'status'    => 'error',
+        'returnCode'=> 1,
+        'message' => 'Gateway Error communicating with backend',
+    ], 500);
 }
-
-$response = $client->publish($request);
-
-echo "client received response: ".PHP_EOL;
-echo "\n\n";
-
-echo $argv[0]." END".PHP_EOL;
-
