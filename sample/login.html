@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <title>IT490 Test Login Page</title>
+    </head>
+<body>
+    <section class="MainHeaderContainer">
+        <header class="MainHeader">
+            <h1>Login Below!</h1>
+        </header>
+        <div id="textResponse">
+            awaiting response
+            <form id="loginForm">
+                <label for="username">Enter username:</label><br>
+                <input type="text" for="username" name="username" id="username" placeholder="username" required>
+                <br>
+                
+                <label for="password">Enter Password:</label><br>
+                <input type="password" for="password" name="password" id="password" required>
+                <br>
+                <input type="hidden" name="type" value="login">
+                <input type="submit" value="login"> 
+            </form>
+
+            <p id="textResponse"> Waiting for response</p>
+        </div>
+    </section>
+    <script>
+        
+    // Add your JavaScript code here
+    document.addEventListener("DOMContentLoaded", function() {
+        function HandleLoginResponse(response)
+        {
+            console.log("Raw response:", response);
+            const out = document.getElementById("textResponse");
+
+            try {
+                const myJsonResponse = JSON.parse(response || "{}");
+
+                if (myJsonResponse.status === "success") {
+                    out.textContent = "Login successful! Redirecting...<p>";
+                    window.location.href = "loggedin.html";
+                } else {
+                    out.textContent = "Login failed: " + (myJsonResponse.message || "Unknown error") + "<p>";
+                }
+            } catch (e) {
+                console.error("JSON parse error:", e);
+                out.textContent = "Error processing response.";
+            }
+        }
+    
+
+        function SendLoginRequestJSON(loginData)
+        {
+            var request = new XMLHttpRequest();
+            request.open("POST","testRabbitMQClient.php",true);
+            request.setRequestHeader("Content-Type","application/json");
+            request.onreadystatechange = function () {
+                if (this.readyState == 4) {
+                    console.log("Server Response:", this.responseText);
+                    HandleLoginResponse(this.responseText);
+                }		
+            };
+            request.onerror = function() {
+                console.error("Request error");
+                document.getElementById("textResponse").innerHTML = "A network error has occurred.";
+            };
+            request.withCredentials = true; // Include cookies
+            request.send(JSON.stringify( loginData) );
+        }
+        
+        document.getElementById("loginForm").addEventListener("submit", function(event) {
+            event.preventDefault(); // Prevent the default form submission
+            const loginUsername = document.getElementById("username").value.trim();
+            const loginPassword = document.getElementById("password").value;
+            SendLoginRequestJSON({ type: "login", username: loginUsername, password: loginPassword }); 
+        });
+    });  
+</script>
+</body>
+</html>
+

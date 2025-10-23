@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+
+<html>
+	<head>
+		<meta charset="utf-8">
+		<title>IT-490-001 Registration Page</title>
+	</head>
+
+	<body>
+		<section class="register-section">
+			<h1>Register Below</h1>
+
+			<form id="registerForm">
+				<input type="text" name="username" id="username" placeholder="username" required>
+				<br>
+				<input type="password" name="password" id="password" placeholder="password" required>
+				<br>
+				<input type="email" for="email" name="email" placeholder="email" id="email" required>
+				<br>
+				<input type="hidden" name="type" value="register">
+				<input type="submit" value="register">
+			</form>
+			<p id="textResponse">awaiting response</p>
+		</section>
+	<script>
+			// You can add JavaScript here if needed for form validation or other purposes
+		document.addEventListener("DOMContentLoaded", function() {
+			function HandleRegisterResponse(xhr){
+				const out = document.getElementById("textResponse");
+
+				if (!out) return;
+
+				if (xhr.status < 200 || xhr.status >= 300) {
+					console.error("HTTP error:", xhr.status, xhr.responseText);
+					out.textContent = `Request failed (${xhr.status}).`;
+					return;
+				}
+
+				const text = xhr.responseText || "";
+				if (!text.trim()) {
+					console.error("Empty response body");
+					out.textContent = "Empty response from server.";
+					return;
+				}
+
+				try {
+					const myJsonResponse = JSON.parse(text);
+					if (myJsonResponse.status === "success") {
+						out.textContent = "Registration successful! Redirecting...";
+						window.location.href = "index.html";
+					} else {
+						out.textContent = "Registration failed: " + (myJsonResponse.message || "Unknown error");
+					}
+				} catch (e) {
+					console.error("JSON parse error:", e, "Raw:", text);
+					out.textContent = "Invalid JSON from server.";
+				}
+			}
+			
+			function SendRegisterRequestJSON(registerData){
+				var request = new XMLHttpRequest();
+				request.open("POST","testRabbitMQClient.php",true); // use absolute path
+				request.setRequestHeader("Content-Type","application/json");
+				request.onreadystatechange = function (){
+					if (this.readyState === 4){
+						HandleRegisterResponse(this);
+					}
+				};
+				request.onerror = function() {
+					console.error("Request error");
+					document.getElementById("textResponse").textContent = "A network error has occurred.";
+				};
+				request.withCredentials = true; // Include cookies
+				request.send(JSON.stringify(registerData));
+			}
+
+		document.getElementById("registerForm").addEventListener("submit", function(event) {
+			event.preventDefault(); // Prevent the default form submission
+			const regUsername = document.getElementById("username").value.trim();
+			const regPassword = document.getElementById("password").value;
+			const regEmail = document.getElementById("email").value.trim();
+			SendRegisterRequestJSON({ type: "register", username: regUsername, password: regPassword, email: regEmail }); 
+		});
+	});
+	</script>
+	</body>
+</html>

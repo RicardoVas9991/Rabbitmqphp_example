@@ -1,6 +1,13 @@
+<!DOCTYPE html>
 <html>
+	<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="icon" type="image/x-icon" href="favicon.ico">
+	<title>IT490 Test Main Page</title>
+	</head>
 <script>
-
+/*
 function HandleLoginResponse(response)
 {
 	var text = JSON.parse(response);
@@ -22,16 +29,37 @@ function SendLoginRequest(username,password)
 		}		
 	}
 	request.send("type=login&uname="+username+"&pword="+password);
-}
+}*/
 </script>
-
-<h1>login page</h1>
 <body>
+	<section class="MainHeaderContainer">
+		<header class="MainHeader">
+			<h1>Welcome to IT490</h1>
+		</header>
+	</section>
+	<section class="MainContentContainer">
+		<main class="MainContent">
+			<div id="textResponse">
+				<table>
+					<tr>
+						<td><a href="register.html">Registration</a></td>
+					</tr>
+
+					<tr>
+						<td><a href="login.html">Login</a></td>
+				</table>
+			</div>
+		</main>
+	</section>
+</body>
+<!--h1>login page</h1-->
+<!--body>
 <div id="textResponse">
 awaiting response
 </div>
 <script>
 SendLoginRequest("kehoed","12345");
 </script>
-</body>
+</body-->
+
 </html>

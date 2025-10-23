@@ -1,0 +1,17 @@
+{
+    "name": "rev/sample",
+    "autoload": {
+        "psr-4": {
+            "Rev\\Sample\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Ricardo Vasquez",
+            "email": "rev@njit.ed"
+        }
+    ],
+    "require": {
+        "php-amqplib/php-amqplib": "^3.7"
+    }
+}
