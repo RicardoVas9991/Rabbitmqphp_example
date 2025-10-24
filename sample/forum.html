@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title> Steddit Forum </title>
+    </head>
+
+    <body>
+        <header>
+            <h1> Steddit Forum </h1>
+            <div class="actions">
+                <a class="link-button" href='loggedin.html'>Go back to dashboard </a>
+                <button class="link-button" id="logoutButton" type="button">Log out </button>
+            </div>
+        </header>
+        <main>
+            <section class="panel" aria-labelledby="threadsHeading">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+                    <h2 id="threadsHeading" style="margin:0;"> Latest Threads</h2>
+                    <button id="refreshThreads" type="button">Refresh</button>
+                </div>
+
+                <div id="statusMessage" role="alert" aria-live="polite"></div>
+                <div id="threads" class="thread-list" aria-live="polite">
+                    <p id="emptyState" class="hidden">No threads available. Start a discussion below</p>
+                </div>
+            </section>
+
+            <section class="panel" aria-labelledby="createThreadHeading">
+                <h2 id="createThreadHeading" style="margin:0;"> Start a new thread </h2>
+                <form id="createThreadForm" novalidate>
+                    <label for="threadTitle">Title</label>
+                    <input type="text" id="threadTitle" name="title" placeholder="share an update or ask a question!" required>
+                    <label for="threadBody">Details</label>
+
+                    <textarea id="threadBody" name="body" placeholder="Find more information from fellow stock traders!" required></textarea>  
+                    <button type="submit"> Post Thread </button>
+                </form>
+            </section>
+        </main>
+
+        <script>
+            (function(){
+                const statusMessage     = document.getElementById('statusMessage');
+                const threadContainer   = document.getElementById('threads');
+                const emptyState        = document.getElementById('emptyState');
+                const refreshButton     = document.getElementById('refreshThreads');
+                const logoutButton      = document.getElementById('logoutButton');
+                const createThreadForm  = document.getElementById("createThreadForm");
+
+                const getStoredSession = () => {
+                    const sessionId = sessionStorage.getItem('session_id');
+                    const authToken = sessionStorage.getItem('auth_token');
+                    if (!sessionId || !authToken) return null;
+                    return { sessionId, authToken };
+                };
+
+                const handleInvalidSession = (message) => {
+                    console.warn(message || 'Session invalid');
+                    sessionStorage.clear();
+                    alert('Session is no longer valid! Redirecting back to login page');
+                    window.location.href = "index.html";
+                };
+
+                const successResponse   = (res) => {
+                    if(!res) return false;
+                    if(res.status && typeof res.status === "string" && res.status.toLowerCase() === "success") return true;
+                    if (typeof res.returnCode !== "undefined" && Number(res.returnCode) === 0) return true;
+                    return false;
+                };
+
+                const request = async(type, payload = {}) => {
+                    const session = getStoredSession();
+                    if (!session) {
+                        throw new Error('Missing session - please log in again.');
+                    }
+
+                    const body = JSON.stringify({
+                        ...payload,
+                        type,
+                        session_id: session.sessionId,
+                        sessionId: session.sessionId,
+                        auth_token: session.authToken,
+                        authToken: session.authToken
+                    });
+
+                    const response = await fetch("testRabbitMQClient.php", {
+                        method: 'POST',
+                        headers: {'content-type': 'application/json'},
+                        body
+                    });
+
+                    if (!response.ok){
+                        const text = await response.text();
+                        throw new Error(`Server error: ${response.status} ${text}`);
+                    }
+
+                    let data;
+                    try {
+                        data = await response.json();
+                    } catch(err) {
+                        throw new Error("Invalid JSON response from gateway");
+                    }
+                    return data;
+                };
+
+                const ensureAuthentication = async () => {
+                    const session = getStoredSession();
+                    if (!session) {
+                        handleInvalidSession('No session tokens found.');
+                        return;
+                    }
+
+                    try{
+                        const res = await request('validate_session');
+                        if (!successResponse(res)){
+                            throw new Error(res.message || 'Session has expired.');
+                        }
+
+                        if (res.session_valid === false) {
+                            throw new Error('Session validation failed.');
+                        }
+                    }catch (err){
+                        handleInvalidSession(err.message);
+                        throw err;
+                    }
+                };
+
+                const renderThread = (threads = []) => {
+                    threadContainer.innerHTML = '';
+                    if (!threads.length){
+                        emptyState.classList.remove('hidden');
+                        threadContainer.appendChild(emptyState);
+                        return;
+                    }
+
+                    emptyState.classList.add('hidden');
+                    const fragment = document.createDocumentFragment();
+
+                    threads.forEach((thread) => {
+                        const card = document.createElement('article');
+                        card.className = "thread-card";
+
+                        const title = document.createElement("h2");
+                        title.textContent = thread.title || 'Untitled Thread';
+                        card.appendChild(title);
+
+                        if(thread.body){
+                            const body = document.createElement('p');
+                            body.textContent = thread.body;
+                            card.appendChild(body);
+                        }
+
+                        const meta = document.createElement('div');
+                        meta.className = 'thread-meta';
+                        const author = thread.author || thread.username || 'anonymous';
+                        const created = thread.created_at ? new Date(thread.created_at).toLocaleString() : '';
+                        meta.textContent = created ? `${author} • ${created}` : author;
+                        card.appendChild(meta);
+                        fragment.appendChild(card);
+                    });
+                    threadContainer.appendChild(fragment);
+                };
+
+                const loadThreads = async () => {
+                    statusMessage.textContent = 'Loading threads.';
+
+                    try {
+                        const res = await request('list_threads');
+
+                        if (!successResponse(res)){
+                            if ((res.message || '').toLowerCase().includes('session')) {
+                                handleInvalidSession(res.message);
+                                return;
+                            }
+                            throw new Error(res.message || "Unable to load threads");
+                        }
+
+                        renderThread(res.threads || []);
+                        statusMessage.textContent = '';
+                    } catch (err){
+                        console.error(err);
+                        if (err.message && err.message.toLowerCase().includes('session')) {
+                            handleInvalidSession(err.message);
+                            return;
+                        }
+                        statusMessage.textContent = err.message;
+                        renderThread([]);
+                    }
+                };
+
+                const createThread = async (title, body) => {
+                    statusMessage.textContent = "Posting thread";
+
+                    try {
+                        const res = await request('create_thread', {title, body});
+
+                        if (!successResponse(res)){
+                            if ((res.message || '').toLowerCase().includes('session')) {
+                                handleInvalidSession(res.message);
+                                return;
+                            }
+                            throw new Error(res.message || "Unable to create thread");
+                        }
+
+                        createThreadForm.reset();
+                        await loadThreads();
+                        statusMessage.textContent = "Thread posted successfully";
+                        setTimeout(() => {
+                            statusMessage.textContent = '';
+                        }, 2500);
+                    }catch (err){
+                        console.error(err);
+                        if (err.message && err.message.toLowerCase().includes('session')) {
+                            handleInvalidSession(err.message);
+                            return;
+                        }
+                        statusMessage.textContent = err.message;
+                    }
+                };
+
+                const logout = () => {
+                    document.cookie = 'session_id=; Max-Age=0; path=/;';
+                    document.cookie = 'auth_token=; Max-Age=0; path=/;';
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    window.location.href = "index.html";
+                };
+
+                logoutButton.addEventListener('click', logout);
+                refreshButton.addEventListener('click', loadThreads);
+
+                createThreadForm.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+
+                    const title = document.getElementById('threadTitle').value.trim();
+                    const body = document.getElementById('threadBody').value.trim();
+
+                    if (!title || !body){
+                        statusMessage.textContent = "Please provide a thread title and some thread details";
+                        return;
+                    }
+
+                    await createThread(title, body);
+                });
+
+                window.addEventListener('DOMContentLoaded', async () => {
+                    try {
+                        await ensureAuthentication();
+                        await loadThreads();
+                    } catch (err) {
+                        console.error(err);
+                    }
+                });
+            })();
+        </script>
+    </body>
+</html>
+
