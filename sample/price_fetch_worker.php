@@ -6,7 +6,7 @@ require_once('rabbitMQLib.inc');
 require_once('mysqlconnect.php'); 
 
 require_once('vendor/autoload.php'); 
-use PhpAmqplib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Connection\AMQPStreamConnection;
 
 echo "Ensuring queue 'price_update_queue' exists...\n";
 try {
