@@ -1,5 +1,5 @@
 <?php
-$api_key = 'YOUR_ALPHA_VANTAGE_KEY';
+$api_key = 'X06XHO4GPPMMFGJJ';
 $symbol = $_GET['symbol'] ?? '';
 
 if (empty($symbol)) {
