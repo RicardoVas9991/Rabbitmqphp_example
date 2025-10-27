@@ -5,7 +5,7 @@ require_once('get_host_info.inc');
 require_once('rabbitMQLib.inc');
 require_once('mysqlconnect.php');
 
-$api_key = 'YOUR_ALPHA_VANTAGE_KEY';
+$api_key = 'X06XHO4GPPMMFGJJ';
 $limit = 5; 
 
 global $pdo; 
