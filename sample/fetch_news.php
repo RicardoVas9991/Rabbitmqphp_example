@@ -1,4 +1,5 @@
 <?php
+require_once('api_helpers.php');
 $api_key = 'X06XHO4GPPMMFGJJ';
 $symbol = $_GET['symbol'] ?? '';
 
