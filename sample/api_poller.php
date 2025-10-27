@@ -1,14 +1,14 @@
 #!/usr/bin/php
 <?php
 require_once __DIR__ . '/vendor/autoload.php'; 
-use PhpAmqplib\Connection\AMQPStreamConnection;
-use PhpAmqplib\Message\AMQPMessage;
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 
-$api_key = 'YOUR_ALPHA_VANTAGE_KEY';
-$rabbitmq_host = 'YOUR_RABBITMQ_SERVER_IP'; 
+$api_key = 'X06XHO4GPPMMFGJJ';
+$rabbitmq_host = '100.114.135.58'; 
 $rabbitmq_port = 5672;
-$rabbitmq_user = 'admin';
-$rabbitmq_pass = 'password';
+$rabbitmq_user = 'test';
+$rabbitmq_pass = 'test';
 $queue_name = 'price_updates';
 
 $all_stocks_to_track = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'];
