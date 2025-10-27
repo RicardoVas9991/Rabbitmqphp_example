@@ -1,17 +1,17 @@
 <?php
 require_once __DIR__ . '/vendor/autoload.php';
-use PhpAmqplib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Connection\AMQPStreamConnection;
 
-$rabbitmq_host = 'localhost'; 
+$rabbitmq_host = '100.114.135.58'; 
 $rabbitmq_port = 5672;
-$rabbitmq_user = 'admin';
-$rabbitmq_pass = 'password';
+$rabbitmq_user = 'test';
+$rabbitmq_pass = 'test';
 $queue_name = 'price_updates';
 
-$db_host = 'localhost';
-$db_name = 'your_stock_db';
-$db_user = 'your_db_user';
-$db_pass = 'your_db_pass';
+$db_host = '127.0.0.1';
+$db_name = 'testdb';
+$db_user = 'testuser';
+$db_pass = 'rv9991$#';
 
 try {
     $pdo = new PDO("mysql:host=$db_host;dbname=$db_name", $db_user, $db_pass);
