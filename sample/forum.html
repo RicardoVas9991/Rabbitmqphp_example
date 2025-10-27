@@ -50,81 +50,136 @@
                 const logoutButton      = document.getElementById('logoutButton');
                 const createThreadForm  = document.getElementById("createThreadForm");
 
-                const getStoredSession = () => {
-                    const sessionId = sessionStorage.getItem('session_id');
-                    const authToken = sessionStorage.getItem('auth_token');
-                    if (!sessionId || !authToken) return null;
-                    return { sessionId, authToken };
-                };
-
-                const handleInvalidSession = (message) => {
-                    console.warn(message || 'Session invalid');
-                    sessionStorage.clear();
-                    alert('Session is no longer valid! Redirecting back to login page');
-                    window.location.href = "index.html";
-                };
-
                 const successResponse   = (res) => {
                     if(!res) return false;
                     if(res.status && typeof res.status === "string" && res.status.toLowerCase() === "success") return true;
                     if (typeof res.returnCode !== "undefined" && Number(res.returnCode) === 0) return true;
+                    if (res.valid === true) return true;
+                    if (res.ok === true) return true;
+                    if (res.success === true) return true;
                     return false;
                 };
 
-                const request = async(type, payload = {}) => {
-                    const session = getStoredSession();
-                    if (!session) {
-                        throw new Error('Missing session - please log in again.');
+                const readSessionData = () => {
+                    let sessionId = sessionStorage.getItem('session_id');
+                    let authToken = sessionStorage.getItem('auth_token');
+
+                    if (!sessionId || !authToken) {
+                        const LsSid     = localStorage.getItem('session_id');
+                        const LsToken   = localStorage.getItem('auth_token');
+                        if (LsSid && LsToken) {
+                            sessionStorage.setItem('session_id', LsSid);
+                            sessionStorage.setItem('auth_token', LsToken);
+                            sessionId = LsSid;
+                            authToken = LsToken;
+                        }
                     }
 
-                    const body = JSON.stringify({
-                        ...payload,
-                        type,
-                        session_id: session.sessionId,
-                        sessionId: session.sessionId,
-                        auth_token: session.authToken,
-                        authToken: session.authToken
-                    });
+                    if (!sessionId || !authToken) return null;
 
-                    const response = await fetch("testRabbitMQClient.php", {
-                        method: 'POST',
-                        headers: {'content-type': 'application/json'},
-                        body
-                    });
-
-                    if (!response.ok){
-                        const text = await response.text();
-                        throw new Error(`Server error: ${response.status} ${text}`);
-                    }
-
-                    let data;
-                    try {
-                        data = await response.json();
-                    } catch(err) {
-                        throw new Error("Invalid JSON response from gateway");
-                    }
-                    return data;
+                    return {
+                        session_id: sessionId,
+                        sessionId,
+                        sessionid: sessionId,
+                        auth_token: authToken
+                    };
                 };
 
-                const ensureAuthentication = async () => {
-                    const session = getStoredSession();
+                const requireSessionData = () => {
+                    const session = readSessionData();
                     if (!session) {
-                        handleInvalidSession('No session tokens found.');
-                        return;
+                        throw new Error('Missing session credentials. Please log in again.');
+                    }
+                    return session;
+                };
+
+                const redirectToLogin = (message) => {
+                    alert(message || 'Session is no longer valid! Redirecting back to login page');
+                    window.location.href = "index.html";
+                };
+
+                const TYPE_ALIASES = {
+                    validate_session:   ['validate_session'],
+                    list_threads:       ['list_threads'],
+                    create_thread:      ['create_thread']
+                };
+
+                const request = async(type, payload = {}, {needsSession = true} = {}) => {
+                    const sessionData = needsSession ? requireSessionData() : (readSessionData() || {});
+                    const candidates = TYPE_ALIASES[type] || [type];
+                    let lastErr;
+
+                    for (const t of candidates){
+                        try {
+                            console.debug('[request] =', t);
+                            const body = JSON.stringify({ ...sessionData, ...payload, type: t });
+                            console.debug('[request body] =', body);
+                            const response = await fetch('mqGateway.php', {
+                                method: 'POST',
+                                headers: { 
+                                    'Content-Type': 'application/json',
+                                    'Accept': 'application/json'
+                                },
+                                credentials: 'same-origin',
+                                body
+                            });
+
+                            if (!response.ok){
+                                const text = await response.text().catch(() => '');
+                                if (response.status == 400 && /unknown request type/i.test(text)){
+                                    lastErr = new Error('Unknown request type');
+                                    continue;
+                                }
+                                throw new Error(`Server Error: ${response.status} ${response.statusText} ${text}`);
+                            }
+
+                            const data = await response.json().catch(() => {
+                                throw new Error("Invalid JSON response from gateway");
+                            })
+
+                            return data;
+                        }catch (e){
+                            lastErr = e;
+                            if(!(e.message && e.message.toLowerCase().includes('unknown request type'))){
+                                break;
+                            }
+                        }
                     }
 
-                    try{
-                        const res = await request('validate_session');
-                        if (!successResponse(res)){
-                            throw new Error(res.message || 'Session has expired.');
+                    throw lastErr || new Error('Request failed for unknown reasons');
+                };
+
+                const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
+
+                const ensureAuthentication = async () => {
+                    try {
+                        const session = readSessionData();
+                        if (!session || !session.session_id || !session.auth_token){
+                            throw new Error('Missing session credentials. Please log in again.');
                         }
 
-                        if (res.session_valid === false) {
-                            throw new Error('Session validation failed.');
+                        console.log('validate_session ->', session.session_id, session.auth_token);
+
+                        const res = await request('validate_session');
+
+                        const ok =
+                          !!(res && typeof res === "object" && ( 
+                              successResponse(res) ||
+                                toBool(res.session_valid) ||
+                                toBool(res.valid) ||
+                                toBool(res.authenticated) || 
+                                toBool(res.ok) ||
+                                (typeof res.status === "string" && res.status.toLowerCase() === "ok")
+                            )
+                        );
+
+                        if(!ok){
+                            throw new Error(res.message || "Session is no longer valid");
                         }
-                    }catch (err){
-                        handleInvalidSession(err.message);
-                        throw err;
+                    } catch (err){
+                        console.error(err);
+                        redirectToLogin(err.message);
+                        return;
                     }
                 };
 
@@ -136,125 +191,104 @@
                         return;
                     }
 
-                    emptyState.classList.add('hidden');
-                    const fragment = document.createDocumentFragment();
+                emptyState.classList.add('hidden');
+                const fragment = document.createDocumentFragment();
 
-                    threads.forEach((thread) => {
-                        const card = document.createElement('article');
-                        card.className = "thread-card";
+                threads.forEach((thread) => {
+                    const card = document.createElement('article');
+                    card.className = "thread-card";
 
-                        const title = document.createElement("h2");
-                        title.textContent = thread.title || 'Untitled Thread';
-                        card.appendChild(title);
+                    const title = document.createElement("h2");
+                    title.textContent = thread.title || 'Untitled Thread';
+                    card.appendChild(title);
 
-                        if(thread.body){
-                            const body = document.createElement('p');
-                            body.textContent = thread.body;
-                            card.appendChild(body);
-                        }
+                    if(thread.body){
+                        const body = document.createElement('p');
+                        body.textContent = thread.body;
+                        card.appendChild(body);
+                    }
 
-                        const meta = document.createElement('div');
-                        meta.className = 'thread-meta';
-                        const author = thread.author || thread.username || 'anonymous';
-                        const created = thread.created_at ? new Date(thread.created_at).toLocaleString() : '';
-                        meta.textContent = created ? `${author} • ${created}` : author;
-                        card.appendChild(meta);
-                        fragment.appendChild(card);
-                    });
-                    threadContainer.appendChild(fragment);
-                };
+                    const meta = document.createElement('div');
+                    meta.className = 'thread-meta'; 
+                    const author = thread.author || thread.username || 'anonymous';
+                    const created = thread.created_at ? new Date(thread.created_at).toLocaleString() : '';
+                    meta.textContent = created ? `${author} • ${created}` : author;
+                    card.appendChild(meta);
+                    fragment.appendChild(card);
+                });
+                threadContainer.appendChild(fragment);
+            };
 
-                const loadThreads = async () => {
-                    statusMessage.textContent = 'Loading threads.';
+            const loadThreads = async () => {
+                statusMessage.textContent = 'Loading threads.';
 
-                    try {
-                        const res = await request('list_threads');
+                try {
+                    const res = await request('list_threads');
 
-                        if (!successResponse(res)){
-                            if ((res.message || '').toLowerCase().includes('session')) {
-                                handleInvalidSession(res.message);
-                                return;
-                            }
-                            throw new Error(res.message || "Unable to load threads");
-                        }
+                    if (!successResponse(res)){
+                        throw new Error(res.message || "Unable to load threads");
+                    }
 
-                        renderThread(res.threads || []);
+                    renderThread(res.threads || []);
+                    statusMessage.textContent = '';
+                } catch (err){
+                    console.log(err);
+                    statusMessage.textContent = err.message;
+                    renderThread([]);
+                }
+            };
+
+            const createThread = async (title, body) => {
+                statusMessage.textContent = "Posting thread";
+                
+                try {
+                    const res = await request('create_thread', {title, body});
+
+                    if (!successResponse(res)){
+                        throw new Error(res.message || "Unable to create thread");
+                    }
+
+                    createThreadForm.reset();
+                    await loadThreads();
+                    statusMessage.textContent = "Thread posted successfully";
+                    setTimeout(() => {
                         statusMessage.textContent = '';
-                    } catch (err){
-                        console.error(err);
-                        if (err.message && err.message.toLowerCase().includes('session')) {
-                            handleInvalidSession(err.message);
-                            return;
-                        }
-                        statusMessage.textContent = err.message;
-                        renderThread([]);
-                    }
-                };
+                    }, 2500);
+                }catch (err){
+                    console.error(err);
+                    statusMessage.textContent = err.message;
+                }
+            };
 
-                const createThread = async (title, body) => {
-                    statusMessage.textContent = "Posting thread";
+            const logout = async () => {
+                document.cookie = 'session_id=; Max-Age=0; path=/;';
+                document.cookie = 'auth_token=; Max-Age=0; path=/;';
+                sessionStorage.clear();
+                localStorage.clear();
+                window.location.href = "index.html";
+            };
 
-                    try {
-                        const res = await request('create_thread', {title, body});
+            logoutButton.addEventListener('click', logout);
+            refreshButton.addEventListener('click', loadThreads);
 
-                        if (!successResponse(res)){
-                            if ((res.message || '').toLowerCase().includes('session')) {
-                                handleInvalidSession(res.message);
-                                return;
-                            }
-                            throw new Error(res.message || "Unable to create thread");
-                        }
+            createThreadForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
 
-                        createThreadForm.reset();
-                        await loadThreads();
-                        statusMessage.textContent = "Thread posted successfully";
-                        setTimeout(() => {
-                            statusMessage.textContent = '';
-                        }, 2500);
-                    }catch (err){
-                        console.error(err);
-                        if (err.message && err.message.toLowerCase().includes('session')) {
-                            handleInvalidSession(err.message);
-                            return;
-                        }
-                        statusMessage.textContent = err.message;
-                    }
-                };
+                const title = document.getElementById('threadTitle').value.trim();
+                const body = document.getElementById('threadBody').value.trim();
 
-                const logout = () => {
-                    document.cookie = 'session_id=; Max-Age=0; path=/;';
-                    document.cookie = 'auth_token=; Max-Age=0; path=/;';
-                    localStorage.clear();
-                    sessionStorage.clear();
-                    window.location.href = "index.html";
-                };
+                if (!title || !body){
+                    statusMessage.textContent = "Please provide a thread title and some thread details";
+                    return;
+                }
 
-                logoutButton.addEventListener('click', logout);
-                refreshButton.addEventListener('click', loadThreads);
-
-                createThreadForm.addEventListener('submit', async (event) => {
-                    event.preventDefault();
-
-                    const title = document.getElementById('threadTitle').value.trim();
-                    const body = document.getElementById('threadBody').value.trim();
-
-                    if (!title || !body){
-                        statusMessage.textContent = "Please provide a thread title and some thread details";
-                        return;
-                    }
-
-                    await createThread(title, body);
-                });
-
-                window.addEventListener('DOMContentLoaded', async () => {
-                    try {
-                        await ensureAuthentication();
-                        await loadThreads();
-                    } catch (err) {
-                        console.error(err);
-                    }
-                });
-            })();
+                await createThread(title, body);
+            });
+            window.addEventListener('DOMContentLoaded', async () => {
+                await ensureAuthentication();
+                await loadThreads();
+            });
+        })();
         </script>
     </body>
 </html>
