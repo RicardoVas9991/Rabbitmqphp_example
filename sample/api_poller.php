@@ -10,6 +10,7 @@ $rabbitmq_port = 5672;
 $rabbitmq_user = 'test';
 $rabbitmq_pass = 'test';
 $queue_name = 'price_updates';
+$date = date('Y-m-d H:i:s');
 
 $all_stocks_to_track = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'];
 
