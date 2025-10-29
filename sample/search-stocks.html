@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IT490 Stock Search Page</title>
+    </head>
+
+    <body>
+        <h2>Search Stocks</h2>
+        <input id="q" placeholder="Enter company or symbol">
+        <button onclick="searchStocks()">Search</button>
+        <div id="out"></div>
+
+        <h2> Get Quote </h2>
+        <input id="symbol" placeholder="Symbol (AAPL)">
+        <button onclick="getQuote()">Get Quote</button>
+        <div id="out2"></div>
+
+        <script>
+            async function searchStocks() {
+                const query = document.getElementById('q').value;
+                const response = await fetch(`search.php?q=${encodeURIComponent(query)}`);
+                document.getElementById('out').innerText = await response.text();
+            }
+
+            async function getQuote() {
+                const symbol = document.getElementById('symbol').value;
+                const response = await fetch(`quote.php?symbol=${encodeURIComponent(symbol)}`);
+                document.getElementById('out2').innerText = await response.text();
+            }
+        </script>
+    </body>
+</html>
