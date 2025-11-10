@@ -12,7 +12,7 @@ if ($symbol === '') {
 
 if (USE_RABBITMQ){
     try{
-        $rpc = new RmqRpcClientIni(RABBITMQ_INI_FILE, 'sharedServer');
+        $rpc = new RmqRpcClientIni("testRabbitMQ.ini", 'sharedServer');
         $res = $rpc->call('GLOBAL_QUOTE', $symbol, RPC_TIMEOUT_MS);
         $rpc->close();
         if($res === null) {
