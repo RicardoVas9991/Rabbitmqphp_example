@@ -11,7 +11,7 @@ if ($q === '') {
 
 if (USE_RABBITMQ){
     try{
-        $rpc = new RmqRpcClientIni(RABBITMQ_INI_FILE, 'sharedServer2');
+        $rpc = new RmqRpcClientIni(RABBITMQ_INI_FILE, 'sharedServer');
         $res = $rpc->call('SYMBOL_SEARCH', $q, RPC_TIMEOUT_MS);
         $rpc->close();
         if($res === null) {
