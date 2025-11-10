@@ -26,7 +26,7 @@ if (USE_RABBITMQ){
         echo json_encode(["ok" => false, "error" => "Internal server error", "details" => $e->getMessage()]);
     }
 } else{
-    $url = ALPHAVANTAGE_API_URL . '?function=GLOBAL_QUOTE&symbol=' . urlencode($symbol) . '&apikey=' . ALPHAVANTAGE_API_KEY;
+    $url = ALPHAVANTAGE_API_URL . '?function=GLOBAL_QUOTE&symbol=' . urlencode($symbol) . '&apikey=' . X06XHO4GPPMMFGJJ;
     $data = @file_get_contents($url);
     echo $data ?: json_encode(["ok" => false, "error" => "Failed to fetch data from Alpha Vantage"]);
 }
