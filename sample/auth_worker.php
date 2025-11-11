@@ -156,9 +156,26 @@ function requestProcessor($request)
 }
 
 // -----------------------------
-// RabbitMQ Server Setup
+// RabbitMQ Client Setup
 // -----------------------------
-$server = new rabbitMQServer("testRabbitMQ.ini", "sharedServer");
+$client  new rabbitMQClient("testRabbitMQ.ini","sharedServer"); //shoudl connect to clint file
+echo "Connected to RabbitMQ Broker..." . PHP_EOL;
+
+while(true){
+    $response = $client->getRequest();
+
+    if($response{
+       echo "Message read from queue:" . PHP_EOL;
+       print_r($response);
+
+        $result = requestProcessor($response); //should process all the requests according to requestprocessor code.
+        echo "Result Proccessed: " . json_encode($result) . PHP_EOL;
+        $client->acknowledge();
+    }
+ usleep(200000);
+}
+
+/*$server = new rabbitMQServer("testRabbitMQ.ini", "sharedServer");
 if ($argc > 1 && $argv[1] == "test") {
     $request = array();
     $request['type'] = 'register';
@@ -169,5 +186,5 @@ if ($argc > 1 && $argv[1] == "test") {
 }else{
     echo "Database server active, waiting for requests..." . PHP_EOL;
     $server->process_requests('requestProcessor');
-}
+}*/
 ?>
