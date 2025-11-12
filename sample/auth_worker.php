@@ -4,7 +4,7 @@ require_once('path.inc');
 require_once('get_host_info.inc');
 require_once('rabbitMQLib.inc');
 
-require_once_DIR_ . '/vendor/autoload.php';
+require_once __DIR__ . '/vendor/autoload.php';
 
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
@@ -170,6 +170,7 @@ $password = 'test';
 $queue = 'testQueue';
 //$client  new rabbitMQClient("testRabbitMQ.ini","sharedServer"); //shoudl connect to clint file- nvm not ideal for current set up
 $connection = new AMQPStreamConnection($host,$port,$user,$password); //uses amqpstreaaam to connect to queue
+$channel = $connection->channel();
 $channel->queue_declare($queue,false,true,false,false);
 echo "Connected to RabbitMQ Broker..." . PHP_EOL;
 
