@@ -4,6 +4,8 @@ require_once('path.inc');
 require_once('get_host_info.inc');
 require_once('rabbitMQLib.inc');
 
+require_once_DIR_ . '/vendor/autoload.php';
+
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
@@ -171,7 +173,7 @@ $connection = new AMQPStreamConnection($host,$port,$user,$password); //uses amqp
 $channel->queue_declare($queue,false,true,false,false);
 echo "Connected to RabbitMQ Broker..." . PHP_EOL;
 
-$callback = function(AMQPMssage $msg){
+$callback = function(AMQPMessage $msg){
     echo "received message: " . $msg->body . PHP_EOL;
     $data = json_decode($msg->body,true);
     if($data){
