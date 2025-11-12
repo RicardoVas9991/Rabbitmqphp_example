@@ -161,7 +161,7 @@ function requestProcessor($request)
 // -----------------------------
 // RabbitMQ Client Setup
 // -----------------------------
-$host = 'sharedServer';
+$host = '100.85.190.111';
 $port = 5672;
 $user = 'test';
 $password = 'test';
