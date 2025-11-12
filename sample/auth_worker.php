@@ -165,7 +165,7 @@ $host = '100.85.190.111';
 $port = 5672;
 $user = 'test';
 $password = 'test';
-$queue = testQueue;
+$queue = 'testQueue';
 //$client  new rabbitMQClient("testRabbitMQ.ini","sharedServer"); //shoudl connect to clint file- nvm not ideal for current set up
 $connection = new AMQPStreamConnection($host,$port,$user,$password); //uses amqpstreaaam to connect to queue
 $channel->queue_declare($queue,false,true,false,false);
