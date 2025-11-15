@@ -4,6 +4,11 @@ require_once('path.inc');
 require_once('get_host_info.inc');
 require_once('rabbitMQLib.inc');
 
+require_once __DIR__ . '/vendor/autoload.php';
+
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
+
 // Detect caller (IP or hostname)
 $client_ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
 
@@ -156,6 +161,34 @@ function requestProcessor($request)
 }
 
 // -----------------------------
+// RabbitMQ Client Setup
+// -----------------------------
+$host = '100.85.190.111';
+$port = 5672;
+$user = 'test';
+$password = 'test';
+$queue = 'testQueue';
+//$client  new rabbitMQClient("testRabbitMQ.ini","sharedServer"); //shoudl connect to clint file- nvm not ideal for current set up
+$connection = new AMQPStreamConnection($host,$port,$user,$password); //uses amqpstreaaam to connect to queue
+$channel = $connection->channel();
+$channel->queue_declare($queue,false,true,false,false);
+echo "Connected to RabbitMQ Broker..." . PHP_EOL;
+
+$callback = function(AMQPMessage $msg){
+    echo "received message: " . $msg->body . PHP_EOL;
+    $data = json_decode($msg->body,true);
+    if($data){
+        $result = requestProcessor($data);
+        echo "received message: " . json_encode($result) . PHP_EOL;
+
+    }else{
+        echo "invalid message".PHP_EOL;
+    }
+    $msg->ack();
+};
+
+/*
+// -----------------------------
 // RabbitMQ Server Setup
 // -----------------------------
 $server = new rabbitMQServer("testRabbitMQ.ini", "sharedServer");
@@ -169,5 +202,6 @@ if ($argc > 1 && $argv[1] == "test") {
 }else{
     echo "Database server active, waiting for requests..." . PHP_EOL;
     $server->process_requests('requestProcessor');
-}
+}*/
 ?>
+
