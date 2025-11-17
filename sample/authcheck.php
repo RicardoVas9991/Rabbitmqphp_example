@@ -1,5 +1,4 @@
 <?php
-// authcheck.php
 // Protect pages by validating the user's cookie session
 
 // Connect to the database
@@ -56,8 +55,7 @@ if ($session['ip_address'] !== $current_ip || $session['user_agent'] !== $curren
     die("Session validation failed (IP/UA mismatch). Please log in again.");
 }
 
-// ✅ Session is valid — you can use $session['username'] for personalization
-// Example:
+// Session is valid — you can use $session['username'] for personalization
 echo "Welcome back, " . htmlspecialchars($session['username']);
 
 ?>

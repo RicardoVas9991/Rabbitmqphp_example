@@ -12,6 +12,7 @@
         }
     ],
     "require": {
-        "php-amqplib/php-amqplib": "^3.7"
+        "php-amqplib/php-amqplib": "^3.7",
+        "ext-spl": "*"
     }
 }

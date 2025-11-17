@@ -11,7 +11,7 @@ if ($q === '') {
 
 if (USE_RABBITMQ){
     try{
-        $rpc = new RmqRpcClientIni(RABBITMQ_INI_FILE, 'sharedServer2');
+        $rpc = new RmqRpcClientIni("testRabbitMQ.ini", 'sharedServer');
         $res = $rpc->call('SYMBOL_SEARCH', $q, RPC_TIMEOUT_MS);
         $rpc->close();
         if($res === null) {
@@ -25,7 +25,7 @@ if (USE_RABBITMQ){
         echo json_encode(["ok" => false, "error" => "Internal server error", "details" => $e->getMessage()]);
     }
 } else {
-    $url = ALPHAVANTAGE_API_URL . '?function=SYMBOL_SEARCH&keywords=' . urlencode($q) . '&apikey=' . ALPHAVANTAGE_API_KEY;
+    $url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=$symbol&apikey=$api_key" . '?function=SYMBOL_SEARCH&keywords=' . urlencode($q) . '&apikey=' . X06XHO4GPPMMFGJJ;
     $data = @file_get_contents($url);
     echo $data ?: json_encode(["ok" => false, "error" => "Failed to fetch data from Alpha Vantage"]);
 }

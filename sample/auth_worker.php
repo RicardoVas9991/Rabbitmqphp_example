@@ -27,18 +27,19 @@ if ($mydb->connect_errno != 0) {
 
 echo "Successfully connected to database as user: $db_user" . PHP_EOL;
 
-// -----------------------------
-// Registration (with bcrypt)
-// -----------------------------
+/*
+|--------------------------------------------------------------------------
+| Registration (with bcrypt)
+|--------------------------------------------------------------------------
+*/
 function doRegister($username, $password, $email)
 {
     global $mydb;
 
-    // Check if username already exists
     $stmt = $mydb->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
     $stmt->bind_param("s", $username);
     $stmt->execute();
-    $result = $stmt->store_result();
+    $stmt->store_result();
 
     if ($stmt->num_rows > 0) {
         $stmt->close();
@@ -47,34 +48,32 @@ function doRegister($username, $password, $email)
 
     $stmt->close();
 
-    // Hash password using bcrypt
     $hashed_password = password_hash($password, PASSWORD_BCRYPT);
 
-    // Insert into DB
     $stmt = $mydb->prepare("INSERT INTO users (username, password, email) VALUES(?, ?, ?)");
     $stmt->bind_param("sss", $username, $hashed_password, $email);
 
     if (!$stmt->execute()) {
         return ["returnCode" => 1, "message" => "Registration failed: " . $stmt->error];
-    } 
+    }
 
     $stmt->close();
-    return ["returnCode" => 0, "message" => "Registration successful"]; 
+    return ["returnCode" => 0, "message" => "Registration successful"];
 }
 
-// -----------------------------
-// Login (with bcrypt verify)
-// -----------------------------
+/*
+|--------------------------------------------------------------------------
+| Login (with verify)
+|--------------------------------------------------------------------------
+*/
 function doLogin($username, $password)
 {
     global $mydb;
 
-    // Fetch hashed password
     $stmt = $mydb->prepare("SELECT password FROM users WHERE username = ? LIMIT 1");
     $stmt->bind_param("s", $username);
     $stmt->execute();
     $stmt->bind_result($hashed_password);
-    $stmt->execute();
     $stmt->fetch();
     $stmt->close();
 
@@ -82,22 +81,21 @@ function doLogin($username, $password)
         return ["returnCode" => 1, "message" => "User not found"];
     }
 
-    // Verify password hash
     if (!password_verify($password, $hashed_password)) {
         return ["returnCode" => 1, "message" => "Invalid password"];
     }
 
-    // Generate session token
     $session_id = bin2hex(random_bytes(16));
     $auth_token = bin2hex(random_bytes(32));
     $expiration = date('Y-m-d H:i:s', time() + 3600);
 
     $stmt = $mydb->prepare("
-    INSERT INTO user_cookies(session_id, username, auth_token, expiration_time) VALUES(?, ?, ?, ?)
+        INSERT INTO user_cookies(session_id, username, auth_token, expiration_time)
+        VALUES(?, ?, ?, ?)
     ");
     $stmt->bind_param("ssss", $session_id, $username, $auth_token, $expiration);
-    
-    if(!$stmt->execute()) {
+
+    if (!$stmt->execute()) {
         return ["returnCode" => 1, "message" => "Failed to create session: " . $stmt->error];
     }
     $stmt->close();
@@ -113,15 +111,20 @@ function doLogin($username, $password)
     ];
 }
 
-// -----------------------------    
-// Session Validation
-// -----------------------------
+/*
+|--------------------------------------------------------------------------
+| Session Validation
+|--------------------------------------------------------------------------
+*/
 function doValidate($sessionId, $authToken)
 {
     global $mydb;
 
     $stmt = $mydb->prepare("
-    SELECT username FROM user_cookies WHERE session_id = ? AND auth_token = ? AND expiration_time > NOW()");
+        SELECT username
+        FROM user_cookies
+        WHERE session_id = ? AND auth_token = ? AND expiration_time > NOW()
+    ");
     $stmt->bind_param("ss", $sessionId, $authToken);
     $stmt->execute();
     $stmt->store_result();
@@ -131,14 +134,16 @@ function doValidate($sessionId, $authToken)
 
     if ($isValid) {
         return ["returnCode" => 0, "message" => "Valid session"];
-    }else {
+    } else {
         return ["returnCode" => 1, "message" => "Invalid session"];
     }
 }
 
-// -----------------------------
-// Request Processor
-// -----------------------------
+/*
+|--------------------------------------------------------------------------
+| Request Processor
+|--------------------------------------------------------------------------
+*/
 function requestProcessor($request)
 {
     echo "Received request:" . PHP_EOL;
@@ -160,48 +165,82 @@ function requestProcessor($request)
     }
 }
 
-// -----------------------------
-// RabbitMQ Client Setup
-// -----------------------------
-$host = '100.85.190.111';
+/*
+|--------------------------------------------------------------------------
+| RabbitMQ Worker Setup
+|--------------------------------------------------------------------------
+*/
+$host = '100.114.135.58';
 $port = 5672;
 $user = 'test';
 $password = 'test';
 $queue = 'testQueue';
-//$client  new rabbitMQClient("testRabbitMQ.ini","sharedServer"); //shoudl connect to clint file- nvm not ideal for current set up
-$connection = new AMQPStreamConnection($host,$port,$user,$password); //uses amqpstreaaam to connect to queue
-$channel = $connection->channel();
-$channel->queue_declare($queue,false,true,false,false);
-echo "Connected to RabbitMQ Broker..." . PHP_EOL;
 
-$callback = function(AMQPMessage $msg){
+// Use env var RABBITMQ_VHOST if provided; otherwise default to a non-root vhost 'test'.
+// If your broker requires '/', set RABBITMQ_VHOST='/' in the environment.
+$vhost = getenv('RABBITMQ_VHOST') !== false ? getenv('RABBITMQ_VHOST') : 'testHost';
+
+try {
+    // attempt connection with explicit vhost
+    $connection = new AMQPStreamConnection($host, $port, $user, $password, $vhost);
+    $channel = $connection->channel();
+} catch (\Exception $e) {
+    // Clear, actionable message and graceful exit if vhost/access is denied
+    echo "Failed to connect to RabbitMQ broker using vhost '{$vhost}': " . $e->getMessage() . PHP_EOL;
+    echo "If you intended to use '/', set environment variable RABBITMQ_VHOST='/' or grant user '{$user}' access to the vhost." . PHP_EOL;
+    exit(1);
+}
+
+$channel->queue_declare($queue, false, true, false, false);
+echo "Connected to RabbitMQ Broker on vhost '{$vhost}'..." . PHP_EOL;
+
+/*
+|--------------------------------------------------------------------------
+| Consumer + RPC Reply Logic
+|--------------------------------------------------------------------------
+*/
+$callback = function(AMQPMessage $msg) use ($channel) {
+
     echo "received message: " . $msg->body . PHP_EOL;
-    $data = json_decode($msg->body,true);
-    if($data){
-        $result = requestProcessor($data);
-        echo "received message: " . json_encode($result) . PHP_EOL;
+    $data = json_decode($msg->body, true);
 
-    }else{
-        echo "invalid message".PHP_EOL;
+    if ($data) {
+
+        $result = requestProcessor($data);
+        echo "processed message: " . json_encode($result) . PHP_EOL;
+
+        // *** Send Response Back to the Reply Queue ***
+        $responseMsg = new AMQPMessage(
+            json_encode($result),
+            [
+                'correlation_id' => $msg->get('correlation_id')
+            ]
+        );
+
+        // Publish reply to client’s temporary callback queue
+        $channel->basic_publish(
+            $responseMsg,
+            '',
+            $msg->get('reply_to')
+        );
+
+    } else {
+        echo "invalid message" . PHP_EOL;
     }
+
     $msg->ack();
 };
 
-/*
-// -----------------------------
-// RabbitMQ Server Setup
-// -----------------------------
-$server = new rabbitMQServer("testRabbitMQ.ini", "sharedServer");
-if ($argc > 1 && $argv[1] == "test") {
-    $request = array();
-    $request['type'] = 'register';
-    $request['username'] = 'testuser';
-    $request['password'] = 'testpass';
-    $request['email'] = 'testuser@example.com'; 
-    print_r(requestProcessor($request));
-}else{
-    echo "Database server active, waiting for requests..." . PHP_EOL;
-    $server->process_requests('requestProcessor');
-}*/
-?>
+$channel->basic_consume($queue, '', false, false, false, false, $callback);
 
+echo "Waiting for incoming RPC requests..." . PHP_EOL;
+
+while ($channel->is_consuming()) {
+    $channel->wait();
+}
+
+// graceful shutdown
+register_shutdown_function(function() use ($channel, $connection) {
+    $channel->close();
+    $connection->close();
+});
