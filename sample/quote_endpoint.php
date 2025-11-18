@@ -1,33 +1,79 @@
 <?php
-require __DIR__ . '/config.php';
-require __DIR__ . '/rpc_client_ini.php';
+require_once __DIR__ . '/vendor/autoload.php';
+// require_once('rabbitMQLib.inc'); 
 
-$symbol = strtoupper(trim($_GET['symbol'] ?? ''));
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 
-if ($symbol === '') {
-    http_response_code(400);
-    echo json_encode(["ok" => false, "error" => "No symbol provided"]);
+header("Content-Type: application/json");
+
+$symbol = $_GET['symbol'] ?? '';
+if (!$symbol) {
+    echo json_encode(['error' => 'No symbol provided']);
     exit;
 }
 
-if (USE_RABBITMQ){
-    try{
-        $rpc = new RmqRpcClientIni("testRabbitMQ.ini", 'sharedServer');
-        $res = $rpc->call('GLOBAL_QUOTE', $symbol, RPC_TIMEOUT_MS);
-        $rpc->close();
-        if($res === null) {
-            http_response_code(504);
-            echo json_encode(["ok" => false, "error" => "No response from server"]);
-        } else {
-            echo json_encode($res);
-        }
-    } catch (Throwable $e){
-        http_response_code(502);
-        echo json_encode(["ok" => false, "error" => "Internal server error", "details" => $e->getMessage()]);
+class QuoteClient {
+    private $connection;
+    private $channel;
+    private $callback_queue;
+    private $response;
+    private $corr_id;
+    private $target_queue;
+
+    public function __construct() {
+        // --- READ INI FILE ---
+        $params = parse_ini_file("testRabbitMQ.ini", true);
+        $config = $params['testServer']; // Use the same section as the worker
+
+        $this->target_queue = $config['QUEUE']; // Send to the worker's queue
+
+        $this->connection = new AMQPStreamConnection(
+            $config['BROKER_HOST'],
+            $config['BROKER_PORT'],
+            $config['USER'],
+            $config['PASSWORD'],
+            $config['VHOST']
+        );
+        $this->channel = $this->connection->channel();
+        
+        list($this->callback_queue, ,) = $this->channel->queue_declare("", false, false, true, false);
+        $this->channel->basic_consume($this->callback_queue, '', false, true, false, false, array($this, 'onResponse'));
     }
-} else{
-    $url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=$symbol&apikey=$api_key" . '?function=GLOBAL_QUOTE&symbol=' . urlencode($symbol) . '&apikey=' . X06XHO4GPPMMFGJJ;
-    $data = @file_get_contents($url);
-    echo $data ?: json_encode(["ok" => false, "error" => "Failed to fetch data from Alpha Vantage"]);
+
+    public function onResponse($rep) {
+        if ($rep->get('correlation_id') == $this->corr_id) {
+            $this->response = $rep->body;
+        }
+    }
+
+    public function getQuote($symbol) {
+        $this->response = null;
+        $this->corr_id = uniqid();
+
+        $request = [
+            'type' => 'get_quote', // Ensure your worker handles this
+            'symbol' => $symbol
+        ];
+
+        $msg = new AMQPMessage(
+            json_encode($request),
+            array('correlation_id' => $this->corr_id, 'reply_to' => $this->callback_queue)
+        );
+
+        $this->channel->basic_publish($msg, '', $this->target_queue);
+        
+        while (!$this->response) {
+            $this->channel->wait();
+        }
+        return $this->response;
+    }
+}
+
+try {
+    $client = new QuoteClient();
+    echo $client->getQuote($symbol);
+} catch (Exception $e) {
+    echo json_encode(['error' => $e->getMessage()]);
 }
 ?>

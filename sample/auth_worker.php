@@ -170,24 +170,28 @@ function requestProcessor($request)
 | RabbitMQ Worker Setup
 |--------------------------------------------------------------------------
 */
-$host = '100.114.135.58';
-$port = 5672;
-$user = 'test';
-$password = 'test';
-$queue = 'testQueue';
+// 1. Load the INI file
+$ini_file = "testRabbitMQ.ini";
+if (!file_exists($ini_file)) {
+    die("Error: Configuration file '$ini_file' not found.\n");
+}
+$params = parse_ini_file($ini_file, true);
 
-// Use env var RABBITMQ_VHOST if provided; otherwise default to a non-root vhost 'test'.
-// If your broker requires '/', set RABBITMQ_VHOST='/' in the environment.
-$vhost = getenv('RABBITMQ_VHOST') !== false ? getenv('RABBITMQ_VHOST') : 'testHost';
+// 2. Get the section you want (e.g., 'testServer' or 'sharedServer')
+$config = $params['testServer']; 
+
+$host = $config['BROKER_HOST'];
+$port = $config['BROKER_PORT'];
+$user = $config['USER'];
+$password = $config['PASSWORD'];
+$vhost = $config['VHOST'];
+$queue = $config['QUEUE']; // Make sure 'QUEUE' is defined in your INI!
 
 try {
-    // attempt connection with explicit vhost
     $connection = new AMQPStreamConnection($host, $port, $user, $password, $vhost);
     $channel = $connection->channel();
 } catch (\Exception $e) {
-    // Clear, actionable message and graceful exit if vhost/access is denied
-    echo "Failed to connect to RabbitMQ broker using vhost '{$vhost}': " . $e->getMessage() . PHP_EOL;
-    echo "If you intended to use '/', set environment variable RABBITMQ_VHOST='/' or grant user '{$user}' access to the vhost." . PHP_EOL;
+    echo "Failed to connect: " . $e->getMessage() . PHP_EOL;
     exit(1);
 }
 
@@ -244,3 +248,4 @@ register_shutdown_function(function() use ($channel, $connection) {
     $channel->close();
     $connection->close();
 });
+

@@ -1,65 +1,114 @@
-#!/usr/bin/php
 <?php
-require_once('path.inc');
-require_once('get_host_info.inc');
-require_once('rabbitMQLib.inc');
+require_once __DIR__ . '/vendor/autoload.php';
 
-// Helper to print usage
-function printUsage() {
-    echo "Usage:\n";
-    echo "  php auth_client.php register <username> <password> <email>\n";
-    echo "  php auth_client.php login <username> <password>\n";
-    echo "  php auth_client.php validate_session <sessionId> <authToken>\n";
-    exit(1);
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
+
+// 1. CORS & JSON Headers
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Headers: Content-Type");
+header("Content-Type: application/json");
+
+// Handle Pre-flight
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    exit(0);
 }
 
-// Argument parsing
-if ($argc < 2) {
-    printUsage();
+// 2. Get Data from Frontend
+$data = json_decode(file_get_contents('php://input'), true);
+
+if (!$data) {
+    echo json_encode(['returnCode' => 1, 'message' => 'Invalid JSON input']);
+    exit;
 }
 
-$type = $argv[1];
-$request = [];
+// 3. RPC Client Class
+// This class handles the complex "Send and Wait" logic
+class RpcClient {
+    private $connection;
+    private $channel;
+    private $callback_queue;
+    private $response;
+    private $corr_id;
 
-switch ($type) {
-    case "register":
-        if ($argc < 5) printUsage();
-        $request = [
-            "type" => "register",
-            "username" => $argv[2],
-            "password" => $argv[3],
-            "email" => $argv[4],
-        ];
-        break;
-    case "login":
-        if ($argc < 4) printUsage();
-        $request = [
-            "type" => "login",
-            "username" => $argv[2],
-            "password" => $argv[3],
-        ];
-        break;
-    case "validate_session":
-        if ($argc < 4) printUsage();
-        $request = [
-            "type" => "validate_session",
-            "sessionId" => $argv[2],
-            "authToken" => $argv[3],
-        ];
-        break;
-    default:
-        printUsage();
+    public function __construct() {
+        // --- CONFIGURATION (MUST MATCH WORKER) ---
+        $host = '100.114.135.58';
+        $port = 5672;
+        $user = 'test';
+        $pass = 'test';
+        $vhost = 'testHost'; // Matches your worker
+
+        $this->connection = new AMQPStreamConnection($host, $port, $user, $pass, $vhost);
+        $this->channel = $this->connection->channel();
+        
+        // Create a temporary, random queue for the response
+        list($this->callback_queue, ,) = $this->channel->queue_declare(
+            "",    // Let RabbitMQ name it
+            false, // Passive
+            false, // Durable
+            true,  // Exclusive (delete when connection closes)
+            false  // Auto-delete
+        );
+
+        // Listen to that temporary queue
+        $this->channel->basic_consume(
+            $this->callback_queue, 
+            '', 
+            false, 
+            true, 
+            false, 
+            false, 
+            array($this, 'onResponse')
+        );
+    }
+
+    public function onResponse($rep) {
+        if ($rep->get('correlation_id') == $this->corr_id) {
+            $this->response = $rep->body;
+        }
+    }
+
+    public function call($request_data) {
+        $this->response = null;
+        $this->corr_id = uniqid();
+
+        $msg = new AMQPMessage(
+            json_encode($request_data),
+            array(
+                'correlation_id' => $this->corr_id,
+                'reply_to'       => $this->callback_queue
+            )
+        );
+
+        // Publish to 'testQueue' (Matches your worker)
+        $this->channel->basic_publish($msg, '', 'testQueue');
+
+        // Wait for the response
+        while (!$this->response) {
+            $this->channel->wait();
+        }
+        
+        return $this->response;
+    }
+    
+    public function close() {
+        $this->channel->close();
+        $this->connection->close();
+    }
 }
 
-// Create client and send request
-$client = new rabbitMQClient("testRabbitMQ.ini", "sharedServer");
-
+// 4. Execute Request
 try {
-    $response = $client->send_request($request);
-    echo "Server response:\n";
-    print_r($response);
+    $client = new RpcClient();
+    $response = $client->call($data);
+    echo $response; // Send the worker's reply back to the browser
+    $client->close();
 } catch (Exception $e) {
-    echo "Error sending request: " . $e->getMessage() . PHP_EOL;
-    exit(1);
+    http_response_code(500);
+    echo json_encode([
+        "returnCode" => 500, 
+        "message" => "RabbitMQ Error: " . $e->getMessage()
+    ]);
 }
 ?>
