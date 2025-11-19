@@ -12,7 +12,7 @@ if ($q === '') {
     exit;
 }
 
-$rpc = new RmqRpcClientIni(__DIR__ . '/testRabbitMQ.ini', 'sharedServer2');
+$rpc = new RmqRpcClientIni(__DIR__ . '/testRabbitMQ.ini', 'sharedServer');
 $res = $rpc->call('SYMBOL_SEARCH', $q, 7000);
 $rpc->close();
 echo json_encode($res ?? ["ok" => false, "error" => "No response from server"]);

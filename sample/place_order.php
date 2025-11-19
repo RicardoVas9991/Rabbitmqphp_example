@@ -1,98 +1,73 @@
 <?php
-declare(strict_types= 1);
+require_once __DIR__ . '/vendor/autoload.php';
 
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '*';
-header("Access-Control-Allow-Origin: $origin");
-header('Access-Control-Allow-Credentials: true');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
-header('Vary: Origin');
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 
+header("Content-Type: application/json");
+header("Access-Control-Allow-Origin: *");
 
+// 1. Get Input
+$input = json_decode(file_get_contents('php://input'), true);
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
+if (!$input) {
+    echo json_encode(['status' => 'error', 'message' => 'Invalid JSON']);
     exit;
-} 
-
-require_once('path.inc');
-require_once('get_host_info.inc');
-require_once('rabbitMQLib.inc');  
-
-header('Content-Type: application/json; charset=utf-8');
-
-function json_response(array $data, int $code = 200): never {
-    http_response_code($code);
-    echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    exit;
-
-
-$raw = file_get_contents('php://input');
-$input = null;
-
-if(is_string($raw) && $raw !== '') {
-    $decoded = json_decode($raw, true);
-
-    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)){
-        $input = $decoded;
-    } 
-} 
-
-if (!is_array($input)) {
-    json_response(['error' => 'Invalid JSON input'], 400);
 }
 
-$type = strtolower((string)($input['type'] ?? ''));
-if ($type !== 'place_trade') { // We only accept 'place_trade'
-    json_response(['error' => 'Unknown request type'], 400);
+// 2. RPC Client
+class TradeRpcClient {
+    private $connection;
+    private $channel;
+    private $callback_queue;
+    private $response;
+    private $corr_id;
+    private $target_queue;
+
+    public function __construct() {
+        $params = parse_ini_file("testRabbitMQ.ini", true);
+        $config = $params['tradeServer']; 
+
+        $this->target_queue = $config['QUEUE'];
+
+        $this->connection = new AMQPStreamConnection(
+            $config['BROKER_HOST'], $config['BROKER_PORT'], 
+            $config['USER'], $config['PASSWORD'], $config['VHOST']
+        );
+        $this->channel = $this->connection->channel();
+        list($this->callback_queue, ,) = $this->channel->queue_declare("", false, false, true, false);
+        $this->channel->basic_consume($this->callback_queue, '', false, true, false, false, [$this, 'onResponse']);
+    }
+
+    public function onResponse($rep) {
+        if ($rep->get('correlation_id') == $this->corr_id) {
+            $this->response = $rep->body;
+        }
+    }
+
+    public function sendTrade($data) {
+        $this->response = null;
+        $this->corr_id = uniqid();
+
+        $msg = new AMQPMessage(
+            json_encode($data),
+            ['correlation_id' => $this->corr_id, 'reply_to' => $this->callback_queue]
+        );
+
+        $this->channel->basic_publish($msg, '', $this->target_queue);
+        
+        while (!$this->response) {
+            $this->channel->wait();
+        }
+        return $this->response;
+    }
 }
 
-$session_id   = (string)($input['session_id'] ?? '');
-$auth_token   = (string)($input['auth_token'] ?? '');
-
-$symbol       = (string)($input['symbol'] ?? '');
-$quantity     = (int)($input['quantity'] ?? 0);
-$trade_type   = strtoupper((string)($input['trade_type'] ?? ''));
-
-if (empty($session_id) || empty($auth_token)) {
-    json_response(['status' => 'error', 'message' => 'Authentication required'], 401);
-}
-if (empty($symbol) || $quantity <= 0 || !in_array($trade_type, ['BUY', 'SELL'])) {
-    json_response(['status' => 'error', 'message' => 'Invalid trade data: Check symbol, quantity, and type.'], 400);
-}
-
-$request = [
-    'type'         => $type, // This will be 'place_trade'
-    'session_id'   => $session_id,
-    'auth_token'   => $auth_token,
-    'symbol'       => $symbol,
-    'quantity'     => $quantity,
-    'trade_type'   => $trade_type,
-];
-
+// 3. Execute
 try {
-    $client = new rabbitMQClient("testRabbitMQ.ini","sharedServer");
-    $response = $client->send_request($request); // Send the trade request
-
-    if(!is_array($response)) {
-        $response = ['status' => 'error', 'message' => (string)$response];
-    }
-
-    $ok = false;
-    if (isset($response['status']) && strtolower((string)$response['status']) === 'success') {
-        $ok = true;
-    }
-
-    json_response([
-        'status'  => $ok ? 'success' : 'error',
-        'message' => $response['message'] ?? 'An unknown error occurred.',
-    ], 200);
-
-} catch (Throwable $e){
-    error_log('place_order.php exception: ' . $e->getMessage());
-    json_response([
-        'status'  => 'error',
-        'message' => 'Gateway Error: Could not communicate with backend.',
-    ], 500);
+    $client = new TradeRpcClient();
+    echo $client->sendTrade($input);
+} catch (Exception $e) {
+    echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
 }
-
+?>

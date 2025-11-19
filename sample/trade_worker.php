@@ -1,123 +1,80 @@
 #!/usr/bin/php
 <?php
-require_once('path.inc');
-require_once('get_host_info.inc');
-require_once('rabbitMQLib.inc');
-
+require_once __DIR__ . '/vendor/autoload.php';
 require_once('mysqlconnect.php');
 
-function forwardToDB($request)
-{
-    $dbClient = new rabbitMQClient("testRabbitMQ.ini", "sharedServer");
-    return $dbClient->send_request($request);
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
+
+// 1. Load Configuration
+$ini_file = "testRabbitMQ.ini";
+if (!file_exists($ini_file)) {
+    die("Error: Config file not found.\n");
+}
+$params = parse_ini_file($ini_file, true);
+$config = $params['tradeServer'];
+
+// 2. Connect
+try {
+    $connection = new AMQPStreamConnection(
+        $config['BROKER_HOST'], $config['BROKER_PORT'], 
+        $config['USER'], $config['PASSWORD'], $config['VHOST']
+    );
+    $channel = $connection->channel();
+} catch (\Exception $e) {
+    echo "Connection Error: " . $e->getMessage() . PHP_EOL;
+    exit(1);
 }
 
-function processTrade($request, $pdo)
-{
-    echo "Processing trade: \n";
-    var_dump($request);
+// 3. Setup Queue
+$queue = $config['QUEUE'];
+$channel->queue_declare($queue, false, true, false, false);
+echo "Trade Worker connected to '$queue'..." . PHP_EOL;
 
-    $auth_request = [
-        'type' => 'validate_session',
-        'session_id' => $request['session_id'],
-        'auth_token' => $request['auth_token']
-    ];
-    $auth_response = forwardToDB($auth_request);
-
-    if (!isset($auth_response['status']) || $auth_response['status'] !== 'success' || !isset($auth_response['user_id'])) {
-        return ['status' => 'error', 'message' => 'Trade failed: Invalid session'];
-    }
-
-    $user_id = $auth_response['user_id'];
-
-    $symbol = $request['symbol'];
+// 4. Trade Logic Function
+function processTrade($request) {
+    global $mydb; 
+    
+    $user_id  = $request['user_id'];
+    $symbol   = $request['symbol'];
     $quantity = (int)$request['quantity'];
-    $trade_type = $request['trade_type'];
+    $type     = $request['type']; 
 
-    $pdo->beginTransaction();
-    try {
-	    $stmt = $pdo->prepare("SELECT s.id, sp.current_price FROM stocks s JOIN stock_prices sp ON s.id = sp.stock_id WHERE s.symbol = ?");
-        $stmt->execute([$symbol]);
-        $stock = $stmt->fetch();
+    echo "Processing $type: $quantity x $symbol for User $user_id\n";
 
-        if (!$stock) {
-            throw new Exception("Stock symbol '$symbol' not found.");
-        }
-        $stock_id = $stock['id'];
-	$current_price = $stock['current_price'];
-
-	$stmt = $pdo->prepare("SELECT id, cash_balance FROM portfolios WHERE user_id = ?");
-        $stmt->execute([$user_id]);
-        $portfolio = $stmt->fetch();
-        $portfolio_id = $portfolio['id'];
-	$cash_balance = $portfolio['cash_balance'];
-
-	if ($trade_type === 'BUY') {
-            $cost = $quantity * $current_price;
-            if ($cash_balance < $cost) {
-                throw new Exception("Insufficient funds.");
-	    }
-
-	    $stmt = $pdo->prepare("UPDATE portfolios SET cash_balance = cash_balance - ? WHERE id = ?");
-	    $stmt->execute([$cost, $portfolio_id]);
-
-	    $stmt = $pdo->prepare("INSERT INTO holdings (portfolio_id, stock_id, quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE quantity = quantity + ?");
-	    $stmt->execute([$portfolio_id, $stock_id, $quantity, $quantity]);
-
-	    } elseif ($trade_type === 'SELL') {
-            $stmt = $pdo->prepare("SELECT quantity FROM holdings WHERE portfolio_id = ? AND stock_id = ?");
-            $stmt->execute([$portfolio_id, $stock_id]);
-	    $holding = $stmt->fetch();
-	    
-	    if (!$holding || $holding['quantity'] < $quantity) {
-                throw new Exception("Not enough shares to sell.");
-            }
-
-	    $proceeds = $quantity * $current_price;
-            $stmt = $pdo->prepare("UPDATE portfolios SET cash_balance = cash_balance + ? WHERE id = ?");
-	    $stmt->execute([$proceeds, $portfolio_id]);
-
-	    $stmt = $pdo->prepare("UPDATE holdings SET quantity = quantity - ? WHERE portfolio_id = ? AND stock_id = ?");
-            $stmt->execute([$quantity, $portfolio_id, $stock_id]);
-	    }
-
-        $stmt = $pdo->prepare("INSERT INTO transactions (portfolio_id, stock_id, trade_type, quantity, price_per_share) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([$portfolio_id, $stock_id, $trade_type, $quantity, $current_price]);
-
-        
-        $pdo->commit();
-        return ['status' => 'success', 'message' => "Trade executed successfully."];
-
-    } catch (Exception $e) {
-        
-        $pdo->rollBack();
-        return ['status' => 'error', 'message' => $e->getMessage()];
+    $stmt = $mydb->prepare("INSERT INTO transactions (user_id, symbol, quantity, type, timestamp) VALUES (?, ?, ?, ?, NOW())");
+    $stmt->bind_param("ssis", $user_id, $symbol, $quantity, $type);
+    
+    if ($stmt->execute()) {
+        return ['status' => 'success', 'message' => "Trade executed: $type $quantity $symbol"];
+    } else {
+        return ['status' => 'error', 'message' => "DB Error: " . $stmt->error];
     }
 }
 
-function requestProcessor($request)
-{
-    global $pdo;
+// 5. Callback Handler
+$callback = function(AMQPMessage $msg) use ($channel) {
+    $data = json_decode($msg->body, true);
+    if ($data) {
+        $result = processTrade($data);
+        
+        $responseMsg = new AMQPMessage(
+            json_encode($result),
+            ['correlation_id' => $msg->get('correlation_id')]
+        );
 
-    echo "Broker received request:" . PHP_EOL;
-    var_dump($request);
-
-    if (!isset($request['type'])) {
-        return ["returnCode" => 1, "message" => "No request type provided"];
+        $channel->basic_publish($responseMsg, '', $msg->get('reply_to'));
+        echo "Reply sent.\n";
     }
+    $msg->ack();
+};
 
-    switch (strtolower($request['type'])) {
-        case "login":
-        case "register":
-        case "validate_session":
-            return forwardToDB($request);
+$channel->basic_consume($queue, '', false, false, false, false, $callback);
 
-        case "place_trade":
-            return processTrade($request, $pdo);
-
-        default:
-            return ["returnCode" => 98, "message" => "Unknown request type"];
-    }
+while ($channel->is_consuming()) {
+    $channel->wait();
 }
 
+$channel->close();
+$connection->close();
 ?>
