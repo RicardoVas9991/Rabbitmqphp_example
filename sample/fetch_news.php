@@ -1,5 +1,6 @@
 <?php
-require_once('api_helpers.php');
+require_once('api_helpers.php'); 
+
 $api_key = 'X06XHO4GPPMMFGJJ';
 $symbol = $_GET['symbol'] ?? '';
 
@@ -16,7 +17,5 @@ if (empty($data) || isset($data['Note'])) {
 }
 
 $articles = $data['feed'] ?? [];
-
 json_response(['articles' => $articles], 200);
 ?>
-

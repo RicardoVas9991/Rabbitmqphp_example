@@ -1,101 +1,58 @@
 #!/usr/bin/php
 <?php
-require_once('path.inc');
-require_once('get_host_info.inc');
-require_once('rabbitMQLib.inc');
-require_once('mysqlconnect.php'); 
+require_once __DIR__ . '/vendor/autoload.php';
+require_once('mysqlconnect.php');
+require_once('config.php');
 
-require_once('vendor/autoload.php'); 
 use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 
-echo "Ensuring queue 'price_update_queue' exists...\n";
+$queue = 'priceQueue';
+
 try {
-    $ini_settings = parse_ini_file("testRabbitMQ.ini", true)["priceServer"];
-
-    $connection = new AMQPStreamConnection(
-        $ini_settings['BROKER_HOST'],
-        $ini_settings['BROKER_PORT'],
-        $ini_settings['USER'],
-        $ini_settings['PASSWORD'],
-        $ini_settings['VHOST']
-    );
+    $connection = new AMQPStreamConnection(RABBIT_HOST, RABBIT_PORT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST);
     $channel = $connection->channel();
-    
-    $channel->queue_declare(
-        $ini_settings['QUEUE'], 
-        false, 
-        true, 
-        false,
-        false 
-    );
-
-    $channel->exchange_declare(
-        $ini_settings['EXCHANGE'],
-        'direct', 
-        false,
-        true, 
-        false
-    );
-
-    echo "Queue '{$ini_settings['QUEUE']}' is ready.\n";
-    
-    $channel->close();
-    $connection->close();
 } catch (Exception $e) {
-    echo "Fatal Error: Could not set up RabbitMQ queue: " . $e->getMessage() . "\n";
-    exit(1); 
+    exit(1);
 }
 
-global $pdo; 
+$channel->queue_declare($queue, false, true, false, false);
+echo "Price Worker listening on $queue...\n";
 
-function doPriceUpdate($request, $pdo)
-{
-    echo "Processing price update for: " . $request['symbol'] . "\n";
-    try {
-        $sql = "INSERT INTO stock_prices (stock_id, current_price)
-                VALUES (?, ?)
-                ON DUPLICATE KEY UPDATE
-                    current_price = VALUES(current_price)";
-        
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([
-            $request['stock_id'],
-            $request['price']
-        ]);
-        
-        return ['status' => 'ok', 'message' => 'Price updated'];
+$callback = function(AMQPMessage $msg) {
+    global $mydb;
+    
+    echo "Received: " . $msg->body . "\n";
+    $data = json_decode($msg->body, true);
+    
+    if ($data && isset($data['symbol'], $data['price'])) {
+        $symbol = $data['symbol'];
+        $price = $data['price'];
 
-    } catch (Exception $e) {
-        echo "DB Error: " . $e->getMessage() . "\n";
-        return ['status' => 'error', 'message' => $e->getMessage()];
+        $stmt = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
+        $stmt->bind_param("s", $symbol);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = $res->fetch_assoc();
+        $stmt->close();
+
+        if ($row) {
+            $stock_id = $row['id'];
+            $stmt = $mydb->prepare("INSERT INTO stock_prices (stock_id, current_price) VALUES (?, ?) ON DUPLICATE KEY UPDATE current_price = ?");
+            $stmt->bind_param("idd", $stock_id, $price, $price);
+            $stmt->execute();
+            $stmt->close();
+            echo "Updated DB: $symbol -> $price\n";
+        } else {
+            echo "Stock $symbol not found in DB.\n";
+        }
     }
+    $msg->ack();
+};
+
+$channel->basic_consume($queue, '', false, false, false, false, $callback);
+
+while ($channel->is_consuming()) {
+    $channel->wait();
 }
-
-function requestProcessor($request)
-{
-    global $pdo; 
-    echo "Received request" . PHP_EOL;
-    var_dump($request);
-
-    if (!isset($request['type'])) {
-        return ["status" => "error", "message" => "No request type provided"];
-    }
-
-    switch (strtolower($request['type'])) {
-        case "update_price":
-            return doPriceUpdate($request, $pdo);
-        
-        default:
-            return ["status" => "error", "message" => "Unknown request type for price worker"];
-    }
-}
-
-$server = new rabbitMQServer("testRabbitMQ.ini", "priceServer");
-
-echo "Price update worker active and waiting for requests..." . PHP_EOL;
-$server->process_requests('requestProcessor');
-
-echo "Price update worker shutting down." . PHP_EOL;
-exit();
 ?>
-

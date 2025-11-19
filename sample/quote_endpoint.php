@@ -22,11 +22,10 @@ class QuoteClient {
     private $target_queue;
 
     public function __construct() {
-        // --- READ INI FILE ---
         $params = parse_ini_file("testRabbitMQ.ini", true);
-        $config = $params['testServer']; // Use the same section as the worker
+        $config = $params['testServer'];
 
-        $this->target_queue = $config['QUEUE']; // Send to the worker's queue
+        $this->target_queue = $config['QUEUE'];
 
         $this->connection = new AMQPStreamConnection(
             $config['BROKER_HOST'],
@@ -52,7 +51,7 @@ class QuoteClient {
         $this->corr_id = uniqid();
 
         $request = [
-            'type' => 'get_quote', // Ensure your worker handles this
+            'type' => 'get_quote', 
             'symbol' => $symbol
         ];
 
