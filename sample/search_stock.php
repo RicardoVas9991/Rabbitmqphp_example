@@ -1,10 +1,8 @@
 <?php
+require_once('api_helpers.php');
+require_once('mysqlconnect.php');
 
-require_once('path.inc');
-require_once('get_host_info.inc');
-
-$api_key = 'X06XHO4GPPMMFGJJ';
-
+$api_key = 'X06XHO4GPPMMFGJJ'; 
 $symbol = $_GET['symbol'] ?? '';
 
 if (empty($symbol)) {
@@ -37,9 +35,9 @@ try {
         'name' => $symbol 
     ];
     
-    require_once('mysqlconnect.php'); 
-    $stmt = $pdo->prepare("INSERT INTO stocks (symbol, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name=name");
-    $stmt->execute([$result['symbol'], $result['symbol']]); 
+    $stmt = $mydb->prepare("INSERT INTO stocks (symbol, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name=name");
+    $stmt->bind_param("ss", $result['symbol'], $result['symbol']);
+    $stmt->execute();
 
     json_response($result, 200);
 
@@ -47,4 +45,3 @@ try {
     json_response(['error' => $e->getMessage()], 500);
 }
 ?>
-

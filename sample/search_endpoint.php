@@ -6,7 +6,6 @@ use PhpAmqpLib\Message\AMQPMessage;
 
 header("Content-Type: application/json");
 
-// Get search query (e.g., ?query=Apple)
 $query = $_GET['query'] ?? '';
 if (!$query) {
     echo json_encode(['error' => 'No search query provided']);
@@ -23,7 +22,7 @@ class SearchRpcClient {
 
     public function __construct() {
         $params = parse_ini_file("testRabbitMQ.ini", true);
-        $config = $params['testServer']; // Make sure this points to your Search/DMZ worker settings
+        $config = $params['testServer']; 
 
         $this->target_queue = $config['QUEUE']; 
 
