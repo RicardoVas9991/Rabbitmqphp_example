@@ -6,75 +6,70 @@ require_once('mysqlconnect.php');
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
-// 1. Load Configuration
-$ini_file = "testRabbitMQ.ini";
-if (!file_exists($ini_file)) {
+$rabbitMqConfigFile = "testRabbitMQ.ini";
+if (!file_exists($rabbitMqConfigFile)) {
     die("Error: Config file not found.\n");
 }
-$params = parse_ini_file($ini_file, true);
-$config = $params['tradeServer'];
+$parsedIniConfig = parse_ini_file($rabbitMqConfigFile, true);
+$tradeServerConfig = $parsedIniConfig['tradeServer'];
 
-// 2. Connect
 try {
-    $connection = new AMQPStreamConnection(
-        $config['BROKER_HOST'], $config['BROKER_PORT'], 
-        $config['USER'], $config['PASSWORD'], $config['VHOST']
+    $tradeBrokerConnection = new AMQPStreamConnection(
+        $tradeServerConfig['BROKER_HOST'], $tradeServerConfig['BROKER_PORT'], 
+        $tradeServerConfig['USER'], $tradeServerConfig['PASSWORD'], $tradeServerConfig['VHOST']
     );
-    $channel = $connection->channel();
-} catch (\Exception $e) {
-    echo "Connection Error: " . $e->getMessage() . PHP_EOL;
+    $tradeExecutionChannel = $tradeBrokerConnection->channel();
+} catch (\Exception $connectionException) {
+    echo "Connection Error: " . $connectionException->getMessage() . PHP_EOL;
     exit(1);
 }
 
-// 3. Setup Queue
-$queue = $config['QUEUE'];
-$channel->queue_declare($queue, false, true, false, false);
-echo "Trade Worker connected to '$queue'..." . PHP_EOL;
+$tradingQueueName = $tradeServerConfig['QUEUE'];
+$tradeExecutionChannel->queue_declare($tradingQueueName, false, true, false, false);
+echo "Trade Worker connected to '$tradingQueueName'..." . PHP_EOL;
 
-// 4. Trade Logic Function
-function processTrade($request) {
+function executeStockTransaction($tradeDetails) {
     global $mydb; 
     
-    $user_id  = $request['user_id'];
-    $symbol   = $request['symbol'];
-    $quantity = (int)$request['quantity'];
-    $type     = $request['type']; 
+    $activeUserId  = $tradeDetails['user_id'];
+    $stockSymbol   = $tradeDetails['symbol'];
+    $shareQuantity = (int)$tradeDetails['quantity'];
+    $transactionType = $tradeDetails['type']; 
 
-    echo "Processing $type: $quantity x $symbol for User $user_id\n";
+    echo "Processing $transactionType: $shareQuantity x $stockSymbol for User $activeUserId\n";
 
-    $stmt = $mydb->prepare("INSERT INTO transactions (user_id, symbol, quantity, type, timestamp) VALUES (?, ?, ?, ?, NOW())");
-    $stmt->bind_param("ssis", $user_id, $symbol, $quantity, $type);
+    $transactionInsertStmt = $mydb->prepare("INSERT INTO transactions (user_id, symbol, quantity, type, timestamp) VALUES (?, ?, ?, ?, NOW())");
+    $transactionInsertStmt->bind_param("ssis", $activeUserId, $stockSymbol, $shareQuantity, $transactionType);
     
-    if ($stmt->execute()) {
-        return ['status' => 'success', 'message' => "Trade executed: $type $quantity $symbol"];
+    if ($transactionInsertStmt->execute()) {
+        return ['status' => 'success', 'message' => "Trade executed: $transactionType $shareQuantity $stockSymbol"];
     } else {
-        return ['status' => 'error', 'message' => "DB Error: " . $stmt->error];
+        return ['status' => 'error', 'message' => "DB Error: " . $transactionInsertStmt->error];
     }
 }
 
-// 5. Callback Handler
-$callback = function(AMQPMessage $msg) use ($channel) {
-    $data = json_decode($msg->body, true);
-    if ($data) {
-        $result = processTrade($data);
+$incomingTradeHandler = function(AMQPMessage $amqpTradeEnvelope) use ($tradeExecutionChannel) {
+    $decodedTradeData = json_decode($amqpTradeEnvelope->body, true);
+    if ($decodedTradeData) {
+        $executionResult = executeStockTransaction($decodedTradeData);
         
-        $responseMsg = new AMQPMessage(
-            json_encode($result),
-            ['correlation_id' => $msg->get('correlation_id')]
+        $tradeResponseMessage = new AMQPMessage(
+            json_encode($executionResult),
+            ['correlation_id' => $amqpTradeEnvelope->get('correlation_id')]
         );
 
-        $channel->basic_publish($responseMsg, '', $msg->get('reply_to'));
+        $tradeExecutionChannel->basic_publish($tradeResponseMessage, '', $amqpTradeEnvelope->get('reply_to'));
         echo "Reply sent.\n";
     }
-    $msg->ack();
+    $amqpTradeEnvelope->ack();
 };
 
-$channel->basic_consume($queue, '', false, false, false, false, $callback);
+$tradeExecutionChannel->basic_consume($tradingQueueName, '', false, false, false, false, $incomingTradeHandler);
 
-while ($channel->is_consuming()) {
-    $channel->wait();
+while ($tradeExecutionChannel->is_consuming()) {
+    $tradeExecutionChannel->wait();
 }
 
-$channel->close();
-$connection->close();
+$tradeExecutionChannel->close();
+$tradeBrokerConnection->close();
 ?>

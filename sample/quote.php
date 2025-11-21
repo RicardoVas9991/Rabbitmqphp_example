@@ -4,94 +4,89 @@ require_once __DIR__ . '/vendor/autoload.php';
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
-// 1. Standard API Headers
 header('Content-Type: application/json; charset=utf-8');
-header("Access-Control-Allow-Origin: *"); 
+header("Access-Control-Allow-Origin: *");
 
-// 2. Get Symbol
-$symbol = strtoupper(trim($_GET['symbol'] ?? ''));
-if ($symbol === '') {
+$targetStockSymbol = strtoupper(trim($_GET['symbol'] ?? ''));
+if ($targetStockSymbol === '') {
     echo json_encode(["ok" => false, "error" => "No symbol provided"]);
     exit;
 }
 
-// 3. RPC Client Class 
-class QuoteRpcClient {
-    private $connection;
-    private $channel;
-    private $callback_queue;
-    private $response;
-    private $corr_id;
-    private $target_queue;
+class MarketDataRpcClient {
+    private $brokerConnection;
+    private $marketDataChannel;
+    private $temporaryReplyQueue;
+    private $marketDataResponse;
+    private $requestCorrelationId;
+    private $targetServiceQueue;
 
     public function __construct() {
-        $ini_file = __DIR__ . '/testRabbitMQ.ini';
-        if (!file_exists($ini_file)) {
+        $rabbitMqConfigFile = __DIR__ . '/testRabbitMQ.ini';
+        if (!file_exists($rabbitMqConfigFile)) {
             throw new Exception("Config file not found");
         }
-        $params = parse_ini_file($ini_file, true);
+        $parsedIniConfig = parse_ini_file($rabbitMqConfigFile, true);
         
-        $config = $params['testServer']; 
+        $serverConfig = $parsedIniConfig['testServer']; 
 
-        $this->target_queue = $config['QUEUE'];
+        $this->targetServiceQueue = $serverConfig['QUEUE'];
 
-        $this->connection = new AMQPStreamConnection(
-            $config['BROKER_HOST'],
-            $config['BROKER_PORT'],
-            $config['USER'],
-            $config['PASSWORD'],
-            $config['VHOST']
+        $this->brokerConnection = new AMQPStreamConnection(
+            $serverConfig['BROKER_HOST'],
+            $serverConfig['BROKER_PORT'],
+            $serverConfig['USER'],
+            $serverConfig['PASSWORD'],
+            $serverConfig['VHOST']
         );
-        $this->channel = $this->connection->channel();
+        $this->marketDataChannel = $this->brokerConnection->channel();
         
-        list($this->callback_queue, ,) = $this->channel->queue_declare(
+        list($this->temporaryReplyQueue, ,) = $this->marketDataChannel->queue_declare(
             "", false, false, true, false
         );
 
-        $this->channel->basic_consume(
-            $this->callback_queue, '', false, true, false, false, 
-            array($this, 'onResponse')
+        $this->marketDataChannel->basic_consume(
+            $this->temporaryReplyQueue, '', false, true, false, false, 
+            array($this, 'handleMarketDataResponse')
         );
     }
 
-    public function onResponse($rep) {
-        if ($rep->get('correlation_id') == $this->corr_id) {
-            $this->response = $rep->body;
+    public function handleMarketDataResponse($amqpResponseMessage) {
+        if ($amqpResponseMessage->get('correlation_id') == $this->requestCorrelationId) {
+            $this->marketDataResponse = $amqpResponseMessage->body;
         }
     }
 
-    public function getQuote($symbol) {
-        $this->response = null;
-        $this->corr_id = uniqid();
+    public function requestStockQuote($symbolToQuery) {
+        $this->marketDataResponse = null;
+        $this->requestCorrelationId = uniqid();
 
-        $request = [
+        $quoteRequestPayload = [
             'type' => 'search', 
-            'query' => $symbol
+            'query' => $symbolToQuery
         ];
 
-        $msg = new AMQPMessage(
-            json_encode($request),
+        $outgoingAmqpMessage = new AMQPMessage(
+            json_encode($quoteRequestPayload),
             array(
-                'correlation_id' => $this->corr_id,
-                'reply_to'       => $this->callback_queue
+                'correlation_id' => $this->requestCorrelationId,
+                'reply_to'       => $this->temporaryReplyQueue
             )
         );
 
-        $this->channel->basic_publish($msg, '', $this->target_queue);
+        $this->marketDataChannel->basic_publish($outgoingAmqpMessage, '', $this->targetServiceQueue);
         
-        // Wait for response
-        while (!$this->response) {
-            $this->channel->wait();
+        while (!$this->marketDataResponse) {
+            $this->marketDataChannel->wait();
         }
-        return $this->response;
+        return $this->marketDataResponse;
     }
 }
 
-// 4. Execute
 try {
-    $client = new QuoteRpcClient();
-    echo $client->getQuote($symbol);
-} catch (Exception $e) {
-    echo json_encode(["ok" => false, "error" => $e->getMessage()]);
+    $marketClient = new MarketDataRpcClient();
+    echo $marketClient->requestStockQuote($targetStockSymbol);
+} catch (Exception $applicationException) {
+    echo json_encode(["ok" => false, "error" => $applicationException->getMessage()]);
 }
 ?>

@@ -1,35 +1,39 @@
 <?php
 require_once('api_helpers.php');
-require_once('mysqlconnect.php'); 
+require_once('mysqlconnect.php');
 
-$symbol = $_GET['symbol'] ?? '';
-if (empty($symbol)) {
-    json_response(['error' => 'No symbol provided'], 400);
+$requestedSymbol = $_GET['symbol'] ?? '';
+
+if (empty($requestedSymbol)) {
+    json_response(['error' => 'A stock symbol parameter is required.'], 400);
 }
 
 try {
-    // 1. Find stock ID
-    $stmt = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
-    $stmt->bind_param("s", $symbol);
-    $stmt->execute();
-    $res = $stmt->get_result();
-    $stock = $res->fetch_assoc();
+    $stockLookupQuery = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
+    $stockLookupQuery->bind_param("s", $requestedSymbol);
+    $stockLookupQuery->execute();
+    
+    $stockResult = $stockLookupQuery->get_result();
+    $stockRecord = $stockResult->fetch_assoc();
+    $stockLookupQuery->close();
 
-    if (!$stock) {
-        json_response(['error' => 'Stock not found'], 404);
+    if (!$stockRecord) {
+        json_response(['error' => "Stock symbol '$requestedSymbol' not found in database."], 404);
     }
     
-    // 2. Get posts
-    $stmt = $mydb->prepare("SELECT id, title, author_username, created_at FROM threads WHERE stock_id = ? ORDER BY created_at DESC");
-    $stmt->bind_param("i", $stock['id']);
-    $stmt->execute();
+    $internalStockId = $stockRecord['id'];
     
-    $res = $stmt->get_result();
-    $posts = $res->fetch_all(MYSQLI_ASSOC);
+    $threadFetchQuery = $mydb->prepare("SELECT id, title, author_username, created_at FROM threads WHERE stock_id = ? ORDER BY created_at DESC");
+    $threadFetchQuery->bind_param("i", $internalStockId);
+    $threadFetchQuery->execute();
+    
+    $threadResultSet = $threadFetchQuery->get_result();
+    $discussionThreads = $threadResultSet->fetch_all(MYSQLI_ASSOC);
+    $threadFetchQuery->close();
 
-    json_response($posts);
+    json_response($discussionThreads);
 
-} catch (Exception $e) {
-    json_response(['error' => 'Database error: ' . $e->getMessage()], 500);
+} catch (Exception $databaseException) {
+    json_response(['error' => 'Message board retrieval failed: ' . $databaseException->getMessage()], 500);
 }
 ?>

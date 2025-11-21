@@ -1,33 +1,36 @@
 <?php
 require_once('api_helpers.php');
-require_once('mysqlconnect.php'); // $pdo
+require_once('mysqlconnect.php');
 session_start();
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['username'])) {
     json_response(['error' => 'Authentication required'], 401);
 }
-$user_id = $_SESSION['user_id'];
-$username = $_SESSION['username'];
+$activeUserId = $_SESSION['user_id'];
+$activeUsername = $_SESSION['username'];
 
-$input = get_json_input();
-$thread_id = (int)($input['thread_id'] ?? 0);
-$body = $input['body'] ?? '';
+$commentPayload = get_json_input();
+$targetThreadId = (int)($commentPayload['thread_id'] ?? 0);
+$commentBodyText = $commentPayload['body'] ?? '';
 
-if ($thread_id <= 0 || empty($body)) {
+if ($targetThreadId <= 0 || empty($commentBodyText)) {
     json_response(['error' => 'Missing thread ID or comment body'], 400);
 }
 
 try {
-    $stmt = $pdo->prepare("INSERT INTO comments (thread_id, author_username, body) VALUES (?, ?, ?)");
-    $stmt->execute([$thread_id, $username, $body]);
-    $new_comment_id = $pdo->lastInsertId();
+    $commentInsertionStmt = $mydb->prepare("INSERT INTO comments (thread_id, author_username, body) VALUES (?, ?, ?)");
+    $commentInsertionStmt->bind_param("iss", $targetThreadId, $activeUsername, $commentBodyText);
+    $commentInsertionStmt->execute();
+    
+    $generatedCommentId = $mydb->insert_id;
+    $commentInsertionStmt->close();
 
-    json_response(['status' => 'success', 'message' => 'Comment posted!', 'new_comment_id' => $new_comment_id]);
+    json_response(['status' => 'success', 'message' => 'Comment posted!', 'new_comment_id' => $generatedCommentId]);
 
-} catch (Exception $e) {
-    if (str_contains($e->getMessage(), 'foreign key constraint fails')) {
+} catch (Exception $databaseException) {
+    if (str_contains($databaseException->getMessage(), 'foreign key constraint fails')) {
          json_response(['error' => 'The thread you are replying to does not exist.'], 404);
     }
-    json_response(['error' => 'Database error: ' . $e->getMessage()], 500);
+    json_response(['error' => 'Database error: ' . $databaseException->getMessage()], 500);
 }
-
+?>

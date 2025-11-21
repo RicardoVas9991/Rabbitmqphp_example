@@ -7,52 +7,52 @@ require_once('config.php');
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
-$queue = 'priceQueue';
+$priceIngestionQueueName = 'priceQueue';
 
 try {
-    $connection = new AMQPStreamConnection(RABBIT_HOST, RABBIT_PORT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST);
-    $channel = $connection->channel();
-} catch (Exception $e) {
+    $priceBrokerConnection = new AMQPStreamConnection(RABBIT_HOST, RABBIT_PORT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST);
+    $priceUpdateChannel = $priceBrokerConnection->channel();
+} catch (Exception $connectionException) {
     exit(1);
 }
 
-$channel->queue_declare($queue, false, true, false, false);
-echo "Price Worker listening on $queue...\n";
+$priceUpdateChannel->queue_declare($priceIngestionQueueName, false, true, false, false);
+echo "Price Ingestion Engine active on: $priceIngestionQueueName..." . PHP_EOL;
 
-$callback = function(AMQPMessage $msg) {
+$incomingPriceHandler = function(AMQPMessage $amqpPriceEnvelope) {
     global $mydb;
     
-    echo "Received: " . $msg->body . "\n";
-    $data = json_decode($msg->body, true);
+    echo "Received Payload: " . $amqpPriceEnvelope->body . PHP_EOL;
+    $decodedPriceData = json_decode($amqpPriceEnvelope->body, true);
     
-    if ($data && isset($data['symbol'], $data['price'])) {
-        $symbol = $data['symbol'];
-        $price = $data['price'];
+    if ($decodedPriceData && isset($decodedPriceData['symbol'], $decodedPriceData['price'])) {
+        $stockSymbol = $decodedPriceData['symbol'];
+        $newMarketPrice = $decodedPriceData['price'];
 
-        $stmt = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
-        $stmt->bind_param("s", $symbol);
-        $stmt->execute();
-        $res = $stmt->get_result();
-        $row = $res->fetch_assoc();
-        $stmt->close();
+        $stockLookupStmt = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
+        $stockLookupStmt->bind_param("s", $stockSymbol);
+        $stockLookupStmt->execute();
+        $lookupResult = $stockLookupStmt->get_result();
+        $stockRecord = $lookupResult->fetch_assoc();
+        $stockLookupStmt->close();
 
-        if ($row) {
-            $stock_id = $row['id'];
-            $stmt = $mydb->prepare("INSERT INTO stock_prices (stock_id, current_price) VALUES (?, ?) ON DUPLICATE KEY UPDATE current_price = ?");
-            $stmt->bind_param("idd", $stock_id, $price, $price);
-            $stmt->execute();
-            $stmt->close();
-            echo "Updated DB: $symbol -> $price\n";
+        if ($stockRecord) {
+            $internalStockId = $stockRecord['id'];
+            $priceUpdateStmt = $mydb->prepare("INSERT INTO stock_prices (stock_id, current_price) VALUES (?, ?) ON DUPLICATE KEY UPDATE current_price = ?");
+            $priceUpdateStmt->bind_param("idd", $internalStockId, $newMarketPrice, $newMarketPrice);
+            $priceUpdateStmt->execute();
+            $priceUpdateStmt->close();
+            echo "Database Updated: $stockSymbol -> $newMarketPrice" . PHP_EOL;
         } else {
-            echo "Stock $symbol not found in DB.\n";
+            echo "Stock symbol $stockSymbol not found in database." . PHP_EOL;
         }
     }
-    $msg->ack();
+    $amqpPriceEnvelope->ack();
 };
 
-$channel->basic_consume($queue, '', false, false, false, false, $callback);
+$priceUpdateChannel->basic_consume($priceIngestionQueueName, '', false, false, false, false, $incomingPriceHandler);
 
-while ($channel->is_consuming()) {
-    $channel->wait();
+while ($priceUpdateChannel->is_consuming()) {
+    $priceUpdateChannel->wait();
 }
 ?>

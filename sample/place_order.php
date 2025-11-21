@@ -7,67 +7,64 @@ use PhpAmqpLib\Message\AMQPMessage;
 header("Content-Type: application/json");
 header("Access-Control-Allow-Origin: *");
 
-// 1. Get Input
-$input = json_decode(file_get_contents('php://input'), true);
+$orderJsonPayload = json_decode(file_get_contents('php://input'), true);
 
-if (!$input) {
+if (!$orderJsonPayload) {
     echo json_encode(['status' => 'error', 'message' => 'Invalid JSON']);
     exit;
 }
 
-// 2. RPC Client
-class TradeRpcClient {
-    private $connection;
-    private $channel;
-    private $callback_queue;
-    private $response;
-    private $corr_id;
-    private $target_queue;
+class OrderSubmissionClient {
+    private $brokerConnection;
+    private $orderChannel;
+    private $executionReplyQueue;
+    private $executionResponse;
+    private $orderCorrelationId;
+    private $targetTradeQueue;
 
     public function __construct() {
-        $params = parse_ini_file("testRabbitMQ.ini", true);
-        $config = $params['tradeServer']; 
+        $parsedIniConfig = parse_ini_file("testRabbitMQ.ini", true);
+        $tradeConfig = $parsedIniConfig['tradeServer']; 
 
-        $this->target_queue = $config['QUEUE'];
+        $this->targetTradeQueue = $tradeConfig['QUEUE'];
 
-        $this->connection = new AMQPStreamConnection(
-            $config['BROKER_HOST'], $config['BROKER_PORT'], 
-            $config['USER'], $config['PASSWORD'], $config['VHOST']
+        $this->brokerConnection = new AMQPStreamConnection(
+            $tradeConfig['BROKER_HOST'], $tradeConfig['BROKER_PORT'], 
+            $tradeConfig['USER'], $tradeConfig['PASSWORD'], $tradeConfig['VHOST']
         );
-        $this->channel = $this->connection->channel();
-        list($this->callback_queue, ,) = $this->channel->queue_declare("", false, false, true, false);
-        $this->channel->basic_consume($this->callback_queue, '', false, true, false, false, [$this, 'onResponse']);
+        $this->orderChannel = $this->brokerConnection->channel();
+        list($this->executionReplyQueue, ,) = $this->orderChannel->queue_declare("", false, false, true, false);
+        $this->orderChannel->basic_consume($this->executionReplyQueue, '', false, true, false, false, [$this, 'handleExecutionReport']);
     }
 
-    public function onResponse($rep) {
-        if ($rep->get('correlation_id') == $this->corr_id) {
-            $this->response = $rep->body;
+    public function handleExecutionReport($amqpReportMessage) {
+        if ($amqpReportMessage->get('correlation_id') == $this->orderCorrelationId) {
+            $this->executionResponse = $amqpReportMessage->body;
         }
     }
 
-    public function sendTrade($data) {
-        $this->response = null;
-        $this->corr_id = uniqid();
+    public function submitOrderToExchange($orderDetails) {
+        $this->executionResponse = null;
+        $this->orderCorrelationId = uniqid();
 
-        $msg = new AMQPMessage(
-            json_encode($data),
-            ['correlation_id' => $this->corr_id, 'reply_to' => $this->callback_queue]
+        $amqpOrderMessage = new AMQPMessage(
+            json_encode($orderDetails),
+            ['correlation_id' => $this->orderCorrelationId, 'reply_to' => $this->executionReplyQueue]
         );
 
-        $this->channel->basic_publish($msg, '', $this->target_queue);
+        $this->orderChannel->basic_publish($amqpOrderMessage, '', $this->targetTradeQueue);
         
-        while (!$this->response) {
-            $this->channel->wait();
+        while (!$this->executionResponse) {
+            $this->orderChannel->wait();
         }
-        return $this->response;
+        return $this->executionResponse;
     }
 }
 
-// 3. Execute
 try {
-    $client = new TradeRpcClient();
-    echo $client->sendTrade($input);
-} catch (Exception $e) {
-    echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    $tradingClient = new OrderSubmissionClient();
+    echo $tradingClient->submitOrderToExchange($orderJsonPayload);
+} catch (Exception $applicationException) {
+    echo json_encode(['status' => 'error', 'message' => $applicationException->getMessage()]);
 }
 ?>

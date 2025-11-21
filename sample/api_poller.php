@@ -6,39 +6,39 @@ require_once('config.php');
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
-$api_key = 'ALPHAVANTAGE_API_KEY';
+$alphaVantageApiKey = 'ALPHAVANTAGE_API_KEY';
 
-$connection = new AMQPStreamConnection(RABBIT_HOST, RABBIT_PORT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST);
-$channel = $connection->channel();
+$marketDataConnection = new AMQPStreamConnection(RABBIT_HOST, RABBIT_PORT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST);
+$marketDataChannel = $marketDataConnection->channel();
 
-$queue = 'priceQueue';
-$channel->queue_declare($queue, false, true, false, false);
+$priceUpdateQueueName = 'priceQueue';
+$marketDataChannel->queue_declare($priceUpdateQueueName, false, true, false, false);
 
-$tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'];
-$symbol = $tickers[date('G') % count($tickers)];
+$monitoredStockTickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'];
+$targetSymbol = $monitoredStockTickers[date('G') % count($monitoredStockTickers)];
 
-echo "Fetching $symbol...\n";
+echo "Fetching $targetSymbol...\n";
 
-$url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=$symbol&apikey=$api_key";
-$json = @file_get_contents($url);
-$data = json_decode($json, true);
+$alphaVantageEndpoint = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=$targetSymbol&apikey=$alphaVantageApiKey";
+$rawApiData = @file_get_contents($alphaVantageEndpoint);
+$parsedMarketData = json_decode($rawApiData, true);
 
-if (isset($data['Global Quote']['05. price'])) {
-    $price = $data['Global Quote']['05. price'];
+if (isset($parsedMarketData['Global Quote']['05. price'])) {
+    $currentMarketPrice = $parsedMarketData['Global Quote']['05. price'];
     
-    $payload = [
+    $priceUpdatePacket = [
         'type' => 'update_price',
-        'symbol' => $symbol,
-        'price' => $price
+        'symbol' => $targetSymbol,
+        'price' => $currentMarketPrice
     ];
 
-    $msg = new AMQPMessage(json_encode($payload));
-    $channel->basic_publish($msg, '', $queue);
-    echo "Sent $symbol @ $price\n";
+    $amqpPriceMessage = new AMQPMessage(json_encode($priceUpdatePacket));
+    $marketDataChannel->basic_publish($amqpPriceMessage, '', $priceUpdateQueueName);
+    echo "Sent $targetSymbol @ $currentMarketPrice\n";
 } else {
     echo "Failed to fetch price.\n";
 }
 
-$channel->close();
-$connection->close();
+$marketDataChannel->close();
+$marketDataConnection->close();
 ?>

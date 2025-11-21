@@ -1,51 +1,55 @@
 <?php
 require_once('api_helpers.php');
-require_once('mysqlconnect.php'); 
+require_once('mysqlconnect.php');
 session_start(); 
 
-if (!isset($_SESSION['user_id'])) {
-    $user_id = $_SESSION['user_id'] ?? $_GET['user_id'] ?? 0;
-} else {
-    $user_id = $_SESSION['user_id'];
+$activeUserId = 0;
+if (isset($_SESSION['user_id'])) {
+    $activeUserId = $_SESSION['user_id'];
+} elseif (isset($_GET['user_id'])) {
+    $activeUserId = (int)$_GET['user_id'];
 }
 
-if (empty($user_id)) {
-    json_response(['error' => 'Authentication required'], 401);
+if ($activeUserId <= 0) {
+    json_response(['error' => 'User authentication required to view portfolio.'], 401);
 }
 
 try {
-    $sql = "SELECT
-                h.quantity,
-                s.symbol,
-                s.name,
-                sp.current_price,
-                (h.quantity * sp.current_price) AS total_value
+    $holdingsSql = "SELECT
+                h.quantity AS shares_owned,
+                s.symbol AS stock_ticker,
+                s.name AS company_name,
+                sp.current_price AS market_price,
+                (h.quantity * sp.current_price) AS total_position_value
             FROM holdings h
             JOIN stocks s ON h.stock_id = s.id
             JOIN stock_prices sp ON h.stock_id = sp.stock_id
             JOIN portfolios p ON h.portfolio_id = p.id
             WHERE p.user_id = ?";
 
-    $stmt = $mydb->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
+    $holdingsQuery = $mydb->prepare($holdingsSql);
+    $holdingsQuery->bind_param("i", $activeUserId);
+    $holdingsQuery->execute();
 
-    $result = $stmt->get_result();
-    $portfolio = $result->fetch_all(MYSQLI_ASSOC);
+    $holdingsResultSet = $holdingsQuery->get_result();
+    $portfolioPositions = $holdingsResultSet->fetch_all(MYSQLI_ASSOC);
+    $holdingsQuery->close();
 
-    $stmt2 = $mydb->prepare("SELECT cash_balance FROM portfolios WHERE user_id = ?");
-    $stmt2->bind_param("i", $user_id);
-    $stmt2->execute();
-    $res2 = $stmt2->get_result();
-    $cash_row = $res2->fetch_assoc();
-    $cash = $cash_row['cash_balance'] ?? 0;
+    $cashBalanceQuery = $mydb->prepare("SELECT cash_balance FROM portfolios WHERE user_id = ?");
+    $cashBalanceQuery->bind_param("i", $activeUserId);
+    $cashBalanceQuery->execute();
+    
+    $cashResult = $cashBalanceQuery->get_result();
+    $cashRecord = $cashResult->fetch_assoc();
+    $liquidCash = $cashRecord['cash_balance'] ?? 0.00;
+    $cashBalanceQuery->close();
 
     json_response([
-        'cash' => $cash,
-        'holdings' => $portfolio
+        'liquid_cash' => $liquidCash,
+        'stock_positions' => $portfolioPositions
     ]);
 
-} catch (Exception $e) {
-    json_response(['error' => 'Database error: ' . $e->getMessage()], 500);
+} catch (Exception $databaseException) {
+    json_response(['error' => 'Portfolio retrieval failed: ' . $databaseException->getMessage()], 500);
 }
 ?>
