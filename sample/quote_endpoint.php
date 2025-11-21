@@ -1,78 +1,78 @@
 <?php
 require_once __DIR__ . '/vendor/autoload.php';
-// require_once('rabbitMQLib.inc'); 
 
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
 header("Content-Type: application/json");
 
-$symbol = $_GET['symbol'] ?? '';
-if (!$symbol) {
+$targetStockSymbol = $_GET['symbol'] ?? '';
+if (!$targetStockSymbol) {
     echo json_encode(['error' => 'No symbol provided']);
     exit;
 }
 
-class QuoteClient {
-    private $connection;
-    private $channel;
-    private $callback_queue;
-    private $response;
-    private $corr_id;
-    private $target_queue;
+class StockQuoteRpcClient {
+    private $brokerConnection;
+    private $quoteChannel;
+    private $temporaryReplyQueue;
+    private $rpcResponse;
+    private $uniqueCorrelationId;
+    private $targetWorkerQueue;
 
     public function __construct() {
-        $params = parse_ini_file("testRabbitMQ.ini", true);
-        $config = $params['testServer'];
+        $rabbitMqConfigFile = "testRabbitMQ.ini";
+        $parsedIniConfig = parse_ini_file($rabbitMqConfigFile, true);
+        $serverConfig = $parsedIniConfig['testServer'];
 
-        $this->target_queue = $config['QUEUE'];
+        $this->targetWorkerQueue = $serverConfig['QUEUE'];
 
-        $this->connection = new AMQPStreamConnection(
-            $config['BROKER_HOST'],
-            $config['BROKER_PORT'],
-            $config['USER'],
-            $config['PASSWORD'],
-            $config['VHOST']
+        $this->brokerConnection = new AMQPStreamConnection(
+            $serverConfig['BROKER_HOST'],
+            $serverConfig['BROKER_PORT'],
+            $serverConfig['USER'],
+            $serverConfig['PASSWORD'],
+            $serverConfig['VHOST']
         );
-        $this->channel = $this->connection->channel();
+        $this->quoteChannel = $this->brokerConnection->channel();
         
-        list($this->callback_queue, ,) = $this->channel->queue_declare("", false, false, true, false);
-        $this->channel->basic_consume($this->callback_queue, '', false, true, false, false, array($this, 'onResponse'));
+        list($this->temporaryReplyQueue, ,) = $this->quoteChannel->queue_declare("", false, false, true, false);
+        $this->quoteChannel->basic_consume($this->temporaryReplyQueue, '', false, true, false, false, array($this, 'handleRpcResponse'));
     }
 
-    public function onResponse($rep) {
-        if ($rep->get('correlation_id') == $this->corr_id) {
-            $this->response = $rep->body;
+    public function handleRpcResponse($amqpResponseMessage) {
+        if ($amqpResponseMessage->get('correlation_id') == $this->uniqueCorrelationId) {
+            $this->rpcResponse = $amqpResponseMessage->body;
         }
     }
 
-    public function getQuote($symbol) {
-        $this->response = null;
-        $this->corr_id = uniqid();
+    public function requestStockQuote($symbolToQuery) {
+        $this->rpcResponse = null;
+        $this->uniqueCorrelationId = uniqid();
 
-        $request = [
+        $quoteRequestPayload = [
             'type' => 'get_quote', 
-            'symbol' => $symbol
+            'symbol' => $symbolToQuery
         ];
 
-        $msg = new AMQPMessage(
-            json_encode($request),
-            array('correlation_id' => $this->corr_id, 'reply_to' => $this->callback_queue)
+        $outgoingAmqpMessage = new AMQPMessage(
+            json_encode($quoteRequestPayload),
+            array('correlation_id' => $this->uniqueCorrelationId, 'reply_to' => $this->temporaryReplyQueue)
         );
 
-        $this->channel->basic_publish($msg, '', $this->target_queue);
+        $this->quoteChannel->basic_publish($outgoingAmqpMessage, '', $this->targetWorkerQueue);
         
-        while (!$this->response) {
-            $this->channel->wait();
+        while (!$this->rpcResponse) {
+            $this->quoteChannel->wait();
         }
-        return $this->response;
+        return $this->rpcResponse;
     }
 }
 
 try {
-    $client = new QuoteClient();
-    echo $client->getQuote($symbol);
-} catch (Exception $e) {
-    echo json_encode(['error' => $e->getMessage()]);
+    $stockQuoteClient = new StockQuoteRpcClient();
+    echo $stockQuoteClient->requestStockQuote($targetStockSymbol);
+} catch (Exception $applicationException) {
+    echo json_encode(['error' => $applicationException->getMessage()]);
 }
 ?>
