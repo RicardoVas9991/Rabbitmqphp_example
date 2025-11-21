@@ -1,173 +1,208 @@
 #!/usr/bin/php
 <?php
-require_once('path.inc');
-require_once('get_host_info.inc');
-require_once('rabbitMQLib.inc');
+require_once __DIR__ . '/vendor/autoload.php';
 
-// Detect caller (IP or hostname)
-$client_ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 
-// Database credentials
-$db_host = '127.0.0.1';
-$db_user = 'testuser';
-$db_pass = 'rv9991$#';
-$db_name = 'testdb';
+$remoteClientIp = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
 
-// Connect to MySQL
-$mydb = new mysqli($db_host, $db_user, $db_pass, $db_name);
-if ($mydb->connect_errno != 0) {
-    echo "Failed to connect to database: " . $mydb->connect_error . PHP_EOL;
+$databaseHost = '127.0.0.1';
+$databaseUser = 'testuser';
+$databasePassword = 'rv9991$#';
+$databaseName = 'testdb';
+
+$authDatabaseConnection = new mysqli($databaseHost, $databaseUser, $databasePassword, $databaseName);
+if ($authDatabaseConnection->connect_errno != 0) {
+    echo "Failed to connect to database: " . $authDatabaseConnection->connect_error . PHP_EOL;
     exit(0);
 }
 
-echo "Successfully connected to database as user: $db_user" . PHP_EOL;
+echo "Successfully connected to database as user: $databaseUser" . PHP_EOL;
 
-// -----------------------------
-// Registration (with bcrypt)
-// -----------------------------
-function doRegister($username, $password, $email)
+function performUserRegistration($targetUsername, $targetPassword, $targetEmail)
 {
-    global $mydb;
+    global $authDatabaseConnection;
 
-    // Check if username already exists
-    $stmt = $mydb->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
-    $stmt->bind_param("s", $username);
-    $stmt->execute();
-    $result = $stmt->store_result();
+    $userLookupQuery = $authDatabaseConnection->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
+    $userLookupQuery->bind_param("s", $targetUsername);
+    $userLookupQuery->execute();
+    $userLookupQuery->store_result();
 
-    if ($stmt->num_rows > 0) {
-        $stmt->close();
+    if ($userLookupQuery->num_rows > 0) {
+        $userLookupQuery->close();
         return ["returnCode" => 1, "message" => "Username already exists"];
     }
 
-    $stmt->close();
+    $userLookupQuery->close();
 
-    // Hash password using bcrypt
-    $hashed_password = password_hash($password, PASSWORD_BCRYPT);
+    $securePasswordHash = password_hash($targetPassword, PASSWORD_BCRYPT);
 
-    // Insert into DB
-    $stmt = $mydb->prepare("INSERT INTO users (username, password, email) VALUES(?, ?, ?)");
-    $stmt->bind_param("sss", $username, $hashed_password, $email);
+    $userInsertionQuery = $authDatabaseConnection->prepare("INSERT INTO users (username, password, email) VALUES(?, ?, ?)");
+    $userInsertionQuery->bind_param("sss", $targetUsername, $securePasswordHash, $targetEmail);
 
-    if (!$stmt->execute()) {
-        return ["returnCode" => 1, "message" => "Registration failed: " . $stmt->error];
-    } 
+    if (!$userInsertionQuery->execute()) {
+        return ["returnCode" => 1, "message" => "Registration failed: " . $userInsertionQuery->error];
+    }
 
-    $stmt->close();
-    return ["returnCode" => 0, "message" => "Registration successful"]; 
+    $userInsertionQuery->close();
+    return ["returnCode" => 0, "message" => "Registration successful"];
 }
 
-// -----------------------------
-// Login (with bcrypt verify)
-// -----------------------------
-function doLogin($username, $password)
+function performUserLogin($targetUsername, $targetPassword)
 {
-    global $mydb;
+    global $authDatabaseConnection;
 
-    // Fetch hashed password
-    $stmt = $mydb->prepare("SELECT password FROM users WHERE username = ? LIMIT 1");
-    $stmt->bind_param("s", $username);
-    $stmt->execute();
-    $stmt->bind_result($hashed_password);
-    $stmt->execute();
-    $stmt->fetch();
-    $stmt->close();
+    $passwordFetchQuery = $authDatabaseConnection->prepare("SELECT password FROM users WHERE username = ? LIMIT 1");
+    $passwordFetchQuery->bind_param("s", $targetUsername);
+    $passwordFetchQuery->execute();
+    $passwordFetchQuery->bind_result($storedPasswordHash);
+    $passwordFetchQuery->fetch();
+    $passwordFetchQuery->close();
 
-    if (!$hashed_password) {
+    if (!$storedPasswordHash) {
         return ["returnCode" => 1, "message" => "User not found"];
     }
 
-    // Verify password hash
-    if (!password_verify($password, $hashed_password)) {
+    if (!password_verify($targetPassword, $storedPasswordHash)) {
         return ["returnCode" => 1, "message" => "Invalid password"];
     }
 
-    // Generate session token
-    $session_id = bin2hex(random_bytes(16));
-    $auth_token = bin2hex(random_bytes(32));
-    $expiration = date('Y-m-d H:i:s', time() + 3600);
+    $generatedSessionId = bin2hex(random_bytes(16));
+    $generatedAuthToken = bin2hex(random_bytes(32));
+    $sessionExpirationTime = date('Y-m-d H:i:s', time() + 3600);
 
-    $stmt = $mydb->prepare("
-    INSERT INTO user_cookies(session_id, username, auth_token, expiration_time) VALUES(?, ?, ?, ?)
+    $sessionInsertionQuery = $authDatabaseConnection->prepare("
+        INSERT INTO user_cookies(session_id, username, auth_token, expiration_time)
+        VALUES(?, ?, ?, ?)
     ");
-    $stmt->bind_param("ssss", $session_id, $username, $auth_token, $expiration);
-    
-    if(!$stmt->execute()) {
-        return ["returnCode" => 1, "message" => "Failed to create session: " . $stmt->error];
+    $sessionInsertionQuery->bind_param("ssss", $generatedSessionId, $targetUsername, $generatedAuthToken, $sessionExpirationTime);
+
+    if (!$sessionInsertionQuery->execute()) {
+        return ["returnCode" => 1, "message" => "Failed to create session: " . $sessionInsertionQuery->error];
     }
-    $stmt->close();
+    $sessionInsertionQuery->close();
 
     return [
         "returnCode" => 0,
         "message" => "Login successful",
         "session" => [
-            "session_id" => $session_id,
-            "auth_token" => $auth_token,
-            "expires" => $expiration
+            "session_id" => $generatedSessionId,
+            "auth_token" => $generatedAuthToken,
+            "expires" => $sessionExpirationTime
         ]
     ];
 }
 
-// -----------------------------    
-// Session Validation
-// -----------------------------
-function doValidate($sessionId, $authToken)
+function performSessionValidation($targetSessionId, $targetAuthToken)
 {
-    global $mydb;
+    global $authDatabaseConnection;
 
-    $stmt = $mydb->prepare("
-    SELECT username FROM user_cookies WHERE session_id = ? AND auth_token = ? AND expiration_time > NOW()");
-    $stmt->bind_param("ss", $sessionId, $authToken);
-    $stmt->execute();
-    $stmt->store_result();
+    $sessionLookupQuery = $authDatabaseConnection->prepare("
+        SELECT username
+        FROM user_cookies
+        WHERE session_id = ? AND auth_token = ? AND expiration_time > NOW()
+    ");
+    $sessionLookupQuery->bind_param("ss", $targetSessionId, $targetAuthToken);
+    $sessionLookupQuery->execute();
+    $sessionLookupQuery->store_result();
 
-    $isValid = $stmt->num_rows > 0;
-    $stmt->close();
+    $isSessionActive = $sessionLookupQuery->num_rows > 0;
+    $sessionLookupQuery->close();
 
-    if ($isValid) {
+    if ($isSessionActive) {
         return ["returnCode" => 0, "message" => "Valid session"];
-    }else {
+    } else {
         return ["returnCode" => 1, "message" => "Invalid session"];
     }
 }
 
-// -----------------------------
-// Request Processor
-// -----------------------------
-function requestProcessor($request)
+function processIncomingRequest($incomingDataPayload)
 {
     echo "Received request:" . PHP_EOL;
-    var_dump($request);
+    var_dump($incomingDataPayload);
 
-    if (!isset($request['type'])) {
+    if (!isset($incomingDataPayload['type'])) {
         return ["returnCode" => 1, "message" => "No type provided"];
     }
 
-    switch ($request['type']) {
+    switch ($incomingDataPayload['type']) {
         case "register":
-            return doRegister($request['username'], $request['password'], $request['email']);
+            return performUserRegistration($incomingDataPayload['username'], $incomingDataPayload['password'], $incomingDataPayload['email']);
         case "login":
-            return doLogin($request['username'], $request['password']);
+            return performUserLogin($incomingDataPayload['username'], $incomingDataPayload['password']);
         case "validate_session":
-            return doValidate($request['sessionId'], $request['authToken']);
+            return performSessionValidation($incomingDataPayload['sessionId'], $incomingDataPayload['authToken']);
         default:
             return ["returnCode" => 1, "message" => "Invalid request type"];
     }
 }
 
-// -----------------------------
-// RabbitMQ Server Setup
-// -----------------------------
-$server = new rabbitMQServer("testRabbitMQ.ini", "sharedServer");
-if ($argc > 1 && $argv[1] == "test") {
-    $request = array();
-    $request['type'] = 'register';
-    $request['username'] = 'testuser';
-    $request['password'] = 'testpass';
-    $request['email'] = 'testuser@example.com'; 
-    print_r(requestProcessor($request));
-}else{
-    echo "Database server active, waiting for requests..." . PHP_EOL;
-    $server->process_requests('requestProcessor');
+$rabbitMqConfigFile = "testRabbitMQ.ini";
+if (!file_exists($rabbitMqConfigFile)) {
+    die("Error: Configuration file '$rabbitMqConfigFile' not found.\n");
 }
-?>
+$parsedIniConfig = parse_ini_file($rabbitMqConfigFile, true);
+
+$serverConfig = $parsedIniConfig['testServer']; 
+
+$brokerHost = $serverConfig['BROKER_HOST'];
+$brokerPort = $serverConfig['BROKER_PORT'];
+$brokerUser = $serverConfig['USER'];
+$brokerPassword = $serverConfig['PASSWORD'];
+$brokerVhost = $serverConfig['VHOST'];
+$targetQueueName = $serverConfig['QUEUE'];
+
+try {
+    $authServiceConnection = new AMQPStreamConnection($brokerHost, $brokerPort, $brokerUser, $brokerPassword, $brokerVhost);
+    $authServiceChannel = $authServiceConnection->channel();
+} catch (\Exception $connectionException) {
+    echo "Failed to connect: " . $connectionException->getMessage() . PHP_EOL;
+    exit(1);
+}
+
+$authServiceChannel->queue_declare($targetQueueName, false, true, false, false);
+echo "Connected to RabbitMQ Broker on vhost '{$brokerVhost}'..." . PHP_EOL;
+
+$incomingAuthRequestHandler = function(AMQPMessage $amqpEnvelope) use ($authServiceChannel) {
+
+    echo "received message: " . $amqpEnvelope->body . PHP_EOL;
+    $decodedJsonBody = json_decode($amqpEnvelope->body, true);
+
+    if ($decodedJsonBody) {
+
+        $processingResult = processIncomingRequest($decodedJsonBody);
+        echo "processed message: " . json_encode($processingResult) . PHP_EOL;
+
+        $outgoingResponseMessage = new AMQPMessage(
+            json_encode($processingResult),
+            [
+                'correlation_id' => $amqpEnvelope->get('correlation_id')
+            ]
+        );
+
+        $authServiceChannel->basic_publish(
+            $outgoingResponseMessage,
+            '',
+            $amqpEnvelope->get('reply_to')
+        );
+
+    } else {
+        echo "invalid message" . PHP_EOL;
+    }
+
+    $amqpEnvelope->ack();
+};
+
+$authServiceChannel->basic_consume($targetQueueName, '', false, false, false, false, $incomingAuthRequestHandler);
+
+echo "Waiting for incoming RPC requests..." . PHP_EOL;
+
+while ($authServiceChannel->is_consuming()) {
+    $authServiceChannel->wait();
+}
+
+register_shutdown_function(function() use ($authServiceChannel, $authServiceConnection) {
+    $authServiceChannel->close();
+    $authServiceConnection->close();
+});

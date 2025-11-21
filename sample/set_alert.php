@@ -1,45 +1,37 @@
 <?php
 require_once('api_helpers.php');
-require_once('mysqlconnect.php'); 
+require_once('mysqlconnect.php');
 session_start();
 
-if (!isset($_SESSION['user_id'])) {
-    json_response(['error' => 'Authentication required'], 401);
-}
-$user_id = $_SESSION['user_id'];
+$alertConfiguration = get_json_input();
+$activeUserId = $alertConfiguration['user_id'] ?? $_SESSION['user_id'] ?? 0;
+$targetStockSymbol = $alertConfiguration['symbol'] ?? '';
+$targetPriceThreshold = $alertConfiguration['target_price'] ?? 0;
+$alertCondition = $alertConfiguration['condition'] ?? 'ABOVE';
 
-$input = get_json_input();
-if (!$input) {
+if (!$activeUserId || !$targetStockSymbol) {
     json_response(['error' => 'Invalid input'], 400);
 }
 
-$symbol = $input['symbol'] ?? '';
-$target_price = (float)($input['target_price'] ?? 0);
-$condition = strtoupper($input['condition'] ?? ''); 
+$stockIdLookup = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
+$stockIdLookup->bind_param("s", $targetStockSymbol);
+$stockIdLookup->execute();
 
-if (empty($symbol) || $target_price <= 0 || !in_array($condition, ['ABOVE', 'BELOW'])) {
-    json_response(['error' => 'Invalid data. Check symbol, price, and condition.'], 400);
+$stockLookupResult = $stockIdLookup->get_result();
+$stockRecord = $stockLookupResult->fetch_assoc();
+$stockIdLookup->close();
+
+if (!$stockRecord) {
+    json_response(['error' => 'Stock not found'], 404);
 }
 
-try {
-    $stmt = $pdo->prepare("SELECT id FROM stocks WHERE symbol = ?");
-    $stmt->execute([$symbol]);
-    $stock = $stmt->fetch();
+$alertInsertionStmt = $mydb->prepare("INSERT INTO price_alerts (user_id, stock_id, target_price, `condition`) VALUES (?, ?, ?, ?)");
+$alertInsertionStmt->bind_param("iids", $activeUserId, $stockRecord['id'], $targetPriceThreshold, $alertCondition);
 
-    if (!$stock) {
-        json_response(['error' => 'Stock not found. Please search for it first.'], 404);
-    }
-    $stock_id = $stock['id'];
-
-    $stmt = $pdo->prepare("INSERT INTO price_alerts (user_id, stock_id, target_price, `condition`) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$user_id, $stock_id, $target_price, $condition]);
-
-    json_response(['status' => 'success', 'message' => 'Alert set!']);
-
-} catch (Exception $e) {
-    if (str_contains($e->getMessage(), 'Duplicate entry')) {
-         json_response(['error' => 'You already have an identical alert for this stock.'], 409);
-    }
-    json_response(['error' => 'Database error: ' . $e->getMessage()], 500);
+if ($alertInsertionStmt->execute()) {
+    json_response(['status' => 'success', 'message' => 'Alert set']);
+} else {
+    json_response(['error' => 'DB Error: ' . $alertInsertionStmt->error], 500);
 }
-
+$alertInsertionStmt->close();
+?>

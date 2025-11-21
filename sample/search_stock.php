@@ -1,50 +1,49 @@
 <?php
+require_once('api_helpers.php');
+require_once('mysqlconnect.php');
 
-require_once('path.inc');
-require_once('get_host_info.inc');
+$alphaVantageApiKey = 'X06XHO4GPPMMFGJJ';
+$targetSymbol = $_GET['symbol'] ?? '';
 
-$api_key = 'X06XHO4GPPMMFGJJ';
-
-$symbol = $_GET['symbol'] ?? '';
-
-if (empty($symbol)) {
-    json_response(['error' => 'No symbol provided'], 400);
+if (empty($targetSymbol)) {
+    json_response(['error' => 'A valid stock symbol is required for search.'], 400);
 }
 
-$url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=$symbol&apikey=$api_key";
+$apiUrl = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=$targetSymbol&apikey=$alphaVantageApiKey";
 
-$response_json = @file_get_contents($url);
-if ($response_json === FALSE) {
-    json_response(['error' => 'Failed to contact API'], 500);
+$rawApiResponse = @file_get_contents($apiUrl);
+if ($rawApiResponse === FALSE) {
+    json_response(['error' => 'Failed to establish connection with Alpha Vantage API.'], 500);
 }
 
-$data = json_decode($response_json, true);
+$alphaVantageResponse = json_decode($rawApiResponse, true);
 
-if (empty($data) || isset($data['Note']) || !isset($data['Global Quote'])) {
-    $message = $data['Note'] ?? 'Invalid symbol or API error.';
-    json_response(['error' => $message], 500);
+if (empty($alphaVantageResponse) || isset($alphaVantageResponse['Note']) || !isset($alphaVantageResponse['Global Quote'])) {
+    $apiErrorMessage = $alphaVantageResponse['Note'] ?? 'Invalid symbol provided or API rate limit reached.';
+    json_response(['error' => $apiErrorMessage], 500);
 }
 
-$quote = $data['Global Quote'];
-if (empty($quote)) {
-    json_response(['error' => "No data found for symbol $symbol"], 404);
+$globalQuoteData = $alphaVantageResponse['Global Quote'];
+
+if (empty($globalQuoteData)) {
+    json_response(['error' => "No market data found for symbol: $targetSymbol"], 404);
 }
 
 try {
-    $result = [
-        'symbol' => $quote['01. symbol'],
-        'price' => $quote['05. price'],
-        'name' => $symbol 
+    $formattedStockData = [
+        'symbol' => $globalQuoteData['01. symbol'],
+        'price'  => $globalQuoteData['05. price'],
+        'name'   => $targetSymbol
     ];
     
-    require_once('mysqlconnect.php'); 
-    $stmt = $pdo->prepare("INSERT INTO stocks (symbol, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name=name");
-    $stmt->execute([$result['symbol'], $result['symbol']]); 
+    $stockInsertStatement = $mydb->prepare("INSERT INTO stocks (symbol, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name=name");
+    $stockInsertStatement->bind_param("ss", $formattedStockData['symbol'], $formattedStockData['symbol']);
+    $stockInsertStatement->execute();
+    $stockInsertStatement->close();
 
-    json_response($result, 200);
+    json_response($formattedStockData, 200);
 
-} catch (Exception $e) {
-    json_response(['error' => $e->getMessage()], 500);
+} catch (Exception $databaseException) {
+    json_response(['error' => 'Database synchronization error: ' . $databaseException->getMessage()], 500);
 }
 ?>
-

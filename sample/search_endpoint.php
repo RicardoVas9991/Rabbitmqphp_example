@@ -1,32 +1,68 @@
 <?php
-require __DIR__ . '/config.php';
-require __DIR__ . '/rpc_client_ini.php';
+require_once __DIR__ . '/vendor/autoload.php';
 
-$q = trim($_GET['q'] ?? '');
-if ($q === '') {
-    http_response_code(400);
-    echo json_encode(["ok" => false, "error" => "No query provided"]);
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
+
+header("Content-Type: application/json");
+
+$query = $_GET['query'] ?? '';
+if (!$query) {
+    echo json_encode(['error' => 'No search query provided']);
     exit;
 }
 
-if (USE_RABBITMQ){
-    try{
-        $rpc = new RmqRpcClientIni(RABBITMQ_INI_FILE, 'sharedServer2');
-        $res = $rpc->call('SYMBOL_SEARCH', $q, RPC_TIMEOUT_MS);
-        $rpc->close();
-        if($res === null) {
-            http_response_code(504);
-            echo json_encode(["ok" => false, "error" => "No response from server"]);
-        } else {
-            echo json_encode($res);
-        }
-    } catch (Throwable $e){
-        http_response_code(502);
-        echo json_encode(["ok" => false, "error" => "Internal server error", "details" => $e->getMessage()]);
+class SearchRpcClient {
+    private $connection;
+    private $channel;
+    private $callback_queue;
+    private $response;
+    private $corr_id;
+    private $target_queue;
+
+    public function __construct() {
+        $params = parse_ini_file("testRabbitMQ.ini", true);
+        $config = $params['testServer']; 
+
+        $this->target_queue = $config['QUEUE']; 
+
+        $this->connection = new AMQPStreamConnection(
+            $config['BROKER_HOST'], $config['BROKER_PORT'], $config['USER'], $config['PASSWORD'], $config['VHOST']
+        );
+        $this->channel = $this->connection->channel();
+        list($this->callback_queue, ,) = $this->channel->queue_declare("", false, false, true, false);
+        $this->channel->basic_consume($this->callback_queue, '', false, true, false, false, array($this, 'onResponse'));
     }
-} else {
-    $url = ALPHAVANTAGE_API_URL . '?function=SYMBOL_SEARCH&keywords=' . urlencode($q) . '&apikey=' . ALPHAVANTAGE_API_KEY;
-    $data = @file_get_contents($url);
-    echo $data ?: json_encode(["ok" => false, "error" => "Failed to fetch data from Alpha Vantage"]);
+
+    public function onResponse($rep) {
+        if ($rep->get('correlation_id') == $this->corr_id) {
+            $this->response = $rep->body;
+        }
+    }
+
+    public function search($query) {
+        $this->response = null;
+        $this->corr_id = uniqid();
+
+        $request = [
+            'type' => 'search',
+            'query' => $query
+        ];
+
+        $msg = new AMQPMessage(json_encode($request), ['correlation_id' => $this->corr_id, 'reply_to' => $this->callback_queue]);
+        $this->channel->basic_publish($msg, '', $this->target_queue);
+        
+        while (!$this->response) {
+            $this->channel->wait();
+        }
+        return $this->response;
+    }
 }
-?>  
+
+try {
+    $client = new SearchRpcClient();
+    echo $client->search($query);
+} catch (Exception $e) {
+    echo json_encode(['error' => $e->getMessage()]);
+}
+?>

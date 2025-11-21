@@ -1,39 +1,46 @@
 <?php
 require_once('api_helpers.php');
-require_once('mysqlconnect.php'); 
+require_once('mysqlconnect.php');
 session_start();
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['username'])) {
     json_response(['error' => 'Authentication required'], 401);
 }
-$user_id = $_SESSION['user_id'];
-$username = $_SESSION['username'];
+$activeUserId = $_SESSION['user_id'];
+$activeUsername = $_SESSION['username'];
 
-$input = get_json_input();
-$symbol = $input['symbol'] ?? '';
-$title = $input['title'] ?? '';
-$content = $input['content'] ?? ''; // Assuming you have this column
+$jsonRequestPayload = get_json_input();
+$targetStockSymbol = $jsonRequestPayload['symbol'] ?? '';
+$postTitle = $jsonRequestPayload['title'] ?? '';
+$postContent = $jsonRequestPayload['content'] ?? '';
 
-if (empty($symbol) || empty($title) || empty($content)) {
+if (empty($targetStockSymbol) || empty($postTitle) || empty($postContent)) {
     json_response(['error' => 'Missing symbol, title, or content'], 400);
 }
 
 try {
-    $stmt = $pdo->prepare("SELECT id FROM stocks WHERE symbol = ?");
-    $stmt->execute([$symbol]);
-    $stock = $stmt->fetch();
+    $stockLookupStmt = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
+    $stockLookupStmt->bind_param("s", $targetStockSymbol);
+    $stockLookupStmt->execute();
+    
+    $stockResult = $stockLookupStmt->get_result();
+    $stockRecord = $stockResult->fetch_assoc();
+    $stockLookupStmt->close();
 
-    if (!$stock) {
+    if (!$stockRecord) {
         json_response(['error' => 'Stock not found'], 404);
     }
 
-    $stmt = $pdo->prepare("INSERT INTO threads (stock_id, author_username, title, content) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$stock['id'], $username, $title, $content]);
-    $new_post_id = $pdo->lastInsertId();
+    $threadInsertionStmt = $mydb->prepare("INSERT INTO threads (stock_id, author_username, title, content) VALUES (?, ?, ?, ?)");
+    $threadInsertionStmt->bind_param("isss", $stockRecord['id'], $activeUsername, $postTitle, $postContent);
+    $threadInsertionStmt->execute();
+    
+    $generatedThreadId = $mydb->insert_id;
+    $threadInsertionStmt->close();
 
-    json_response(['status' => 'success', 'message' => 'Post created!', 'new_post_id' => $new_post_id]);
+    json_response(['status' => 'success', 'message' => 'Post created!', 'new_post_id' => $generatedThreadId]);
 
-} catch (Exception $e) {
-    json_response(['error' => 'Database error: ' . $e->getMessage()], 500);
+} catch (Exception $databaseException) {
+    json_response(['error' => 'Database error: ' . $databaseException->getMessage()], 500);
 }
-
+?>

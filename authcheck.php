@@ -56,7 +56,7 @@ if ($session['ip_address'] !== $current_ip || $session['user_agent'] !== $curren
     die("Session validation failed (IP/UA mismatch). Please log in again.");
 }
 
-// ✅ Session is valid — you can use $session['username'] for personalization
+// Session is valid — you can use $session['username'] for personalization
 // Example:
 echo "Welcome back, " . htmlspecialchars($session['username']);
 

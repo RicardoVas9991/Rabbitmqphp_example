@@ -1,101 +1,58 @@
 #!/usr/bin/php
 <?php
-require_once('path.inc');
-require_once('get_host_info.inc');
-require_once('rabbitMQLib.inc');
-require_once('mysqlconnect.php'); 
+require_once __DIR__ . '/vendor/autoload.php';
+require_once('mysqlconnect.php');
+require_once('config.php');
 
-require_once('vendor/autoload.php'); 
 use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 
-echo "Ensuring queue 'price_update_queue' exists...\n";
+$priceIngestionQueueName = 'priceQueue';
+
 try {
-    $ini_settings = parse_ini_file("testRabbitMQ.ini", true)["priceServer"];
+    $priceBrokerConnection = new AMQPStreamConnection(RABBIT_HOST, RABBIT_PORT, RABBIT_USER, RABBIT_PASS, RABBIT_VHOST);
+    $priceUpdateChannel = $priceBrokerConnection->channel();
+} catch (Exception $connectionException) {
+    exit(1);
+}
 
-    $connection = new AMQPStreamConnection(
-        $ini_settings['BROKER_HOST'],
-        $ini_settings['BROKER_PORT'],
-        $ini_settings['USER'],
-        $ini_settings['PASSWORD'],
-        $ini_settings['VHOST']
-    );
-    $channel = $connection->channel();
+$priceUpdateChannel->queue_declare($priceIngestionQueueName, false, true, false, false);
+echo "Price Ingestion Engine active on: $priceIngestionQueueName..." . PHP_EOL;
+
+$incomingPriceHandler = function(AMQPMessage $amqpPriceEnvelope) {
+    global $mydb;
     
-    $channel->queue_declare(
-        $ini_settings['QUEUE'], 
-        false, 
-        true, 
-        false,
-        false 
-    );
-
-    $channel->exchange_declare(
-        $ini_settings['EXCHANGE'],
-        'direct', 
-        false,
-        true, 
-        false
-    );
-
-    echo "Queue '{$ini_settings['QUEUE']}' is ready.\n";
+    echo "Received Payload: " . $amqpPriceEnvelope->body . PHP_EOL;
+    $decodedPriceData = json_decode($amqpPriceEnvelope->body, true);
     
-    $channel->close();
-    $connection->close();
-} catch (Exception $e) {
-    echo "Fatal Error: Could not set up RabbitMQ queue: " . $e->getMessage() . "\n";
-    exit(1); 
-}
+    if ($decodedPriceData && isset($decodedPriceData['symbol'], $decodedPriceData['price'])) {
+        $stockSymbol = $decodedPriceData['symbol'];
+        $newMarketPrice = $decodedPriceData['price'];
 
-global $pdo; 
+        $stockLookupStmt = $mydb->prepare("SELECT id FROM stocks WHERE symbol = ?");
+        $stockLookupStmt->bind_param("s", $stockSymbol);
+        $stockLookupStmt->execute();
+        $lookupResult = $stockLookupStmt->get_result();
+        $stockRecord = $lookupResult->fetch_assoc();
+        $stockLookupStmt->close();
 
-function doPriceUpdate($request, $pdo)
-{
-    echo "Processing price update for: " . $request['symbol'] . "\n";
-    try {
-        $sql = "INSERT INTO stock_prices (stock_id, current_price)
-                VALUES (?, ?)
-                ON DUPLICATE KEY UPDATE
-                    current_price = VALUES(current_price)";
-        
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([
-            $request['stock_id'],
-            $request['price']
-        ]);
-        
-        return ['status' => 'ok', 'message' => 'Price updated'];
-
-    } catch (Exception $e) {
-        echo "DB Error: " . $e->getMessage() . "\n";
-        return ['status' => 'error', 'message' => $e->getMessage()];
+        if ($stockRecord) {
+            $internalStockId = $stockRecord['id'];
+            $priceUpdateStmt = $mydb->prepare("INSERT INTO stock_prices (stock_id, current_price) VALUES (?, ?) ON DUPLICATE KEY UPDATE current_price = ?");
+            $priceUpdateStmt->bind_param("idd", $internalStockId, $newMarketPrice, $newMarketPrice);
+            $priceUpdateStmt->execute();
+            $priceUpdateStmt->close();
+            echo "Database Updated: $stockSymbol -> $newMarketPrice" . PHP_EOL;
+        } else {
+            echo "Stock symbol $stockSymbol not found in database." . PHP_EOL;
+        }
     }
+    $amqpPriceEnvelope->ack();
+};
+
+$priceUpdateChannel->basic_consume($priceIngestionQueueName, '', false, false, false, false, $incomingPriceHandler);
+
+while ($priceUpdateChannel->is_consuming()) {
+    $priceUpdateChannel->wait();
 }
-
-function requestProcessor($request)
-{
-    global $pdo; 
-    echo "Received request" . PHP_EOL;
-    var_dump($request);
-
-    if (!isset($request['type'])) {
-        return ["status" => "error", "message" => "No request type provided"];
-    }
-
-    switch (strtolower($request['type'])) {
-        case "update_price":
-            return doPriceUpdate($request, $pdo);
-        
-        default:
-            return ["status" => "error", "message" => "Unknown request type for price worker"];
-    }
-}
-
-$server = new rabbitMQServer("testRabbitMQ.ini", "priceServer");
-
-echo "Price update worker active and waiting for requests..." . PHP_EOL;
-$server->process_requests('requestProcessor');
-
-echo "Price update worker shutting down." . PHP_EOL;
-exit();
 ?>
-
